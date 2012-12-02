@@ -36,8 +36,12 @@ describe "Customer Details" do
     it "should be able to populate customer details for an existing order" do
       click_link "Customer Details"
       fill_in "customer_search", :with => "foobar"
-      sleep(3)
-      page.execute_script %Q{ $('.ui-menu-item a:contains("foobar@example.com"):first').trigger("mouseenter").click(); }
+
+      wait_until do
+        page.should have_selector('.ui-menu-item a:contains("foobar@example.com")', :visible => true)
+      end
+
+      page.execute_script %Q{ $('.ui-menu-item a:contains("foobar@example.com")').trigger("mouseenter").click(); }
 
       ["ship_address", "bill_address"].each do |address|
         find_field("order_#{address}_attributes_firstname").value.should == "John"
