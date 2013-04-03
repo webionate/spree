@@ -126,7 +126,23 @@ module Spree
               end
               checkout_steps << step
             end
-            checkout_steps.map(&:to_s)
+            steps = checkout_steps.map(&:to_s)
+            # Ensure there is always a complete step
+            steps << "complete" unless steps.include?("complete")
+            steps
+          end
+
+          def has_checkout_step?(step)
+            step.present? ? self.checkout_steps.include?(step) : false
+          end
+
+          def checkout_step_index(step)
+            self.checkout_steps.index(step)
+          end
+
+          def can_go_to_state?(state)
+            return false unless self.state.present? && has_checkout_step?(state) && has_checkout_step?(self.state)
+            checkout_step_index(state) > checkout_step_index(self.state)
           end
         end
       end

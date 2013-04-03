@@ -53,27 +53,22 @@ module Spree
       assert_unauthorized!
     end
 
-    it "cannot change delivery information on an order that doesn't belong to them" do
-      api_put :delivery, :id => order.to_param
-      assert_unauthorized!
-    end
-
     it "can create an order" do
       variant = create(:variant)
-      api_post :create, :order => { :line_items => [{ :variant_id => variant.to_param, :quantity => 5 }] }
+      api_post :create, :order => { :line_items => { "0" => { :variant_id => variant.to_param, :quantity => 5 } } }
       response.status.should == 201
       order = Order.last
       order.line_items.count.should == 1
       order.line_items.first.variant.should == variant
       order.line_items.first.quantity.should == 5
-      json_response["state"].should == "address"
+      json_response["state"].should == "cart"
     end
 
     it "can create an order without any parameters" do
       lambda { api_post :create }.should_not raise_error(NoMethodError)
       response.status.should == 201
       order = Order.last
-      json_response["state"].should == "address"
+      json_response["state"].should == "cart"
     end
 
     context "working with an order" do
@@ -92,56 +87,14 @@ module Spree
       end
 
       let(:address_params) { { :country_id => Country.first.id, :state_id => State.first.id } }
-      let(:shipping_address) { clean_address(attributes_for(:address).merge!(address_params)) }
-      let(:billing_address) { clean_address(attributes_for(:address).merge!(address_params)) }
+      let(:billing_address) { { :firstname => "Tiago", :lastname => "Motta", :address1 => "Av Paulista", 
+                                :city => "Sao Paulo", :zipcode => "1234567", :phone => "12345678",
+                                :country_id => Country.first.id, :state_id => State.first.id} }
+      let(:shipping_address) { { :firstname => "Tiago", :lastname => "Motta", :address1 => "Av Paulista", 
+                                 :city => "Sao Paulo", :zipcode => "1234567", :phone => "12345678",
+                                 :country_id => Country.first.id, :state_id => State.first.id} }
       let!(:shipping_method) { create(:shipping_method) }
       let!(:payment_method) { create(:payment_method) }
-
-      it "can add address information to an order" do
-        api_put :address, :id => order.to_param, :shipping_address => shipping_address, :billing_address => billing_address
-
-        response.status.should == 200
-        order.reload
-        order.shipping_address.reload
-        order.billing_address.reload
-        # We can assume the rest of the parameters are set if these two are
-        order.shipping_address.firstname.should == shipping_address[:firstname]
-        order.billing_address.firstname.should == billing_address[:firstname]
-        order.state.should == "delivery"
-        json_response["shipping_methods"].should_not be_empty
-      end
-
-      it "can add just shipping address information to an order" do
-        api_put :address, :id => order.to_param, :shipping_address => shipping_address
-        response.status.should == 200
-        order.reload
-        order.shipping_address.reload
-        order.shipping_address.firstname.should == shipping_address[:firstname]
-        order.bill_address.should be_nil
-      end
-
-      it "cannot use an address that has no valid shipping methods" do
-        shipping_method.destroy
-        api_put :address, :id => order.to_param, :shipping_address => shipping_address, :billing_address => billing_address
-        response.status.should == 422
-        json_response["errors"]["base"].should == ["No shipping methods available for selected location, please change your address and try again."]
-      end
-
-      it "can not add invalid ship address information to an order" do
-        shipping_address[:firstname] = ""
-        api_put :address, :id => order.to_param, :shipping_address => shipping_address, :billing_address => billing_address
-
-        response.status.should == 422
-        json_response["errors"]["ship_address.firstname"].should_not be_blank
-      end
-
-      it "can not add invalid ship address information to an order" do
-        billing_address[:firstname] = ""
-        api_put :address, :id => order.to_param, :shipping_address => shipping_address, :billing_address => billing_address
-
-        response.status.should == 422
-        json_response["errors"]["bill_address.firstname"].should_not be_blank
-      end
 
       it "can add line items" do
         api_put :update, :id => order.to_param, :order => { :line_items => [{:variant_id => create(:variant).id, :quantity => 2}] }
@@ -149,38 +102,68 @@ module Spree
         response.status.should == 200
         json_response['item_total'].to_f.should_not == order.item_total.to_f
       end
+      
+      it "can add billing address" do
+        order.bill_address.should be_nil
+        
+        api_put :update, :id => order.to_param, :order => { :bill_address_attributes => billing_address }
+        
+        order.reload.bill_address.should_not be_nil
+      end
+      
+      it "receives error message if trying to add billing address with errors" do
+        order.bill_address.should be_nil
+        billing_address[:firstname] = ""
+        
+        api_put :update, :id => order.to_param, :order => { :bill_address_attributes => billing_address }
+        
+        json_response['error'].should_not be_nil
+        json_response['errors'].should_not be_nil
+        json_response['errors']['bill_address.firstname'].first.should eq "can't be blank"
+      end
+      
+      it "can add shipping address" do
+        order.ship_address.should be_nil
+        
+        api_put :update, :id => order.to_param, :order => { :ship_address_attributes => shipping_address }
+        
+        order.reload.ship_address.should_not be_nil
+      end
+      
+      it "receives error message if trying to add shipping address with errors" do
+        order.ship_address.should be_nil
+        shipping_address[:firstname] = ""
+        
+        api_put :update, :id => order.to_param, :order => { :ship_address_attributes => shipping_address }
+        
+        json_response['error'].should_not be_nil
+        json_response['errors'].should_not be_nil
+        json_response['errors']['ship_address.firstname'].first.should eq "can't be blank"
+      end
 
       context "with a line item" do
         before do
           order.line_items << create(:line_item)
         end
 
-        context "for delivery" do
-          before do
-            order.update_attribute(:state, "delivery")
-          end
-
-          it "can select a shipping method for an order" do
-            order.shipping_method.should be_nil
-            api_put :delivery, :id => order.to_param, :shipping_method_id => shipping_method.id
-            response.status.should == 200
-            order.reload
-            order.state.should == "payment"
-            order.shipping_method.should == shipping_method
-          end
-
-          it "cannot select an invalid shipping method for an order" do
-            order.shipping_method.should be_nil
-            api_put :delivery, :id => order.to_param, :shipping_method_id => '1234567890'
-            response.status.should == 422
-            json_response["errors"].should include("Invalid shipping method specified.")
-          end
-        end
-
         it "can empty an order" do
           api_put :empty, :id => order.to_param
           response.status.should == 200
           order.reload.line_items.should be_empty
+        end
+        
+        it "can list its line items with images" do
+          order.line_items.first.variant.images.create!(:attachment => image("thinking-cat.jpg"))
+          
+          api_get :show, :id => order.to_param
+          
+          json_response['line_items'].first['variant'].should have_attributes([:images])
+        end
+        
+        it "lists variants product id" do
+          api_get :show, :id => order.to_param
+
+          json_response['line_items'].first['variant'].should have_attributes([:product_id])
         end
       end
     end
@@ -239,6 +222,11 @@ module Spree
 
       context "can cancel an order" do
         before do
+          Spree::MailMethod.create!(
+            :environment => Rails.env,
+            :preferred_mails_from => "spree@example.com"
+          )
+
           order.completed_at = Time.now
           order.state = 'complete'
           order.shipment_state = 'ready'

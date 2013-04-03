@@ -52,11 +52,11 @@
               <div class="choices">
                 <ul>
                   <li>
-                    <%= radio_button_tag :currency_symbol_position, "before" %>
+                    <%= radio_button_tag :currency_symbol_position, "before", Spree::Config[:currency_symbol_position] == "before" %>
                     <%= label_tag :currency_symbol_position_before, Spree::Money.new(10, :symbol_position => "before") %>
                   </li>
-                  <li>
-                    <%= radio_button_tag :currency_symbol_position, "after" %>
+                  <li class="white-space-nowrap">
+                    <%= radio_button_tag :currency_symbol_position, "after", Spree::Config[:currency_symbol_position] == "after" %>
                     <%= label_tag :currency_symbol_position_after, Spree::Money.new(10, :symbol_position => "after") %>
                   </li>
                 </ul>
@@ -69,7 +69,7 @@
       <div class="form-buttons filter-actions actions" data-hook="buttons">
         <%= button t(:update), 'icon-refresh' %>
         <span class="or"><%= t(:or) %></span>
-        <%= link_to_with_icon 'icon-remove', t(:cancel), admin_general_settings_url, :class => 'button' %>
+        <%= link_to_with_icon 'icon-remove', t(:cancel), edit_admin_general_settings_url, :class => 'button' %>
       </div>
 
     </fieldset>

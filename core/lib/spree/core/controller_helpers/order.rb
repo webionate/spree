@@ -5,18 +5,9 @@ module Spree
         def self.included(base)
           base.class_eval do
             helper_method :current_order
+            helper_method :current_currency
             before_filter :set_current_order
           end
-        end
-
-        # This should be overridden by an auth-related extension which would then have the
-        # opportunity to associate the new order with the # current user before saving.
-        def before_save_new_order
-        end
-
-        # This should be overridden by an auth-related extension which would then have the
-        # opporutnity to store tokens, etc. in the session # after saving.
-        def after_save_new_order
         end
 
         # The current incomplete order from the session for use in cart and during checkout
@@ -27,13 +18,20 @@ module Spree
             @current_order = current_order unless current_order.try(:completed?)
           end
           if create_order_if_necessary and (@current_order.nil? or @current_order.completed?)
-            @current_order = Spree::Order.new(currency: current_currency)
-            before_save_new_order
+            @current_order = Spree::Order.new(:currency => current_currency)
+            @current_order.user ||= try_spree_current_user
             @current_order.save!
-            after_save_new_order
+
+            # make sure the user has permission to access the order (if they are a guest)
+            if try_spree_current_user.nil?
+              session[:access_token] = @current_order.token
+            end
           end
-          session[:order_id] = @current_order ? @current_order.id : nil
-          @current_order
+          if @current_order
+            @current_order.last_ip_address = ip_address
+            session[:order_id] = @current_order.id
+            return @current_order
+          end
         end
 
         def associate_user
@@ -60,10 +58,18 @@ module Spree
             last_incomplete_order = user.last_incomplete_spree_order
             if session[:order_id].nil? && last_incomplete_order
               session[:order_id] = last_incomplete_order.id
-            elsif current_order && last_incomplete_order && current_order != last_incomplete_order
+            elsif current_order(true) && last_incomplete_order && current_order != last_incomplete_order
               current_order.merge!(last_incomplete_order)
             end
           end
+        end
+
+        def current_currency
+          Spree::Config[:currency]
+        end
+
+        def ip_address
+          request.env['HTTP_X_REAL_IP'] || request.env['REMOTE_ADDR']
         end
       end
     end

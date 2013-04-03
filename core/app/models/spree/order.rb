@@ -24,14 +24,14 @@ module Spree
         order.payment_required?
       }
       go_to_state :confirm, :if => lambda { |order| order.confirmation_required? }
-      go_to_state :complete, :if => lambda { |order| (order.payment_required? && order.paid?) || !order.payment_required? }
+      go_to_state :complete, :if => lambda { |order| (order.payment_required? && order.has_unprocessed_payments?) || !order.payment_required? }
       remove_transition :from => :delivery, :to => :confirm
     end
 
     token_resource
 
     attr_accessible :line_items, :bill_address_attributes, :ship_address_attributes, :payments_attributes,
-                    :ship_address, :bill_address, :line_items_attributes, :number,
+                    :ship_address, :bill_address, :payments_attributes, :line_items_attributes, :number,
                     :shipping_method_id, :email, :use_billing, :special_instructions, :currency
 
     if Spree.user_class
@@ -52,7 +52,13 @@ module Spree
     has_many :line_items, :dependent => :destroy, :order => "created_at ASC"
     has_many :inventory_units
     has_many :payments, :dependent => :destroy
-    has_many :shipments, :dependent => :destroy
+
+    has_many :shipments, :dependent => :destroy do
+      def states
+        pluck(:state).uniq
+      end
+    end
+
     has_many :return_authorizations, :dependent => :destroy
     has_many :adjustments, :as => :adjustable, :dependent => :destroy, :order => "created_at ASC"
 
@@ -158,7 +164,14 @@ module Spree
 
     # If true, causes the confirmation step to happen during the checkout process
     def confirmation_required?
-      payment_method && payment_method.payment_profiles_supported?
+      payments.map(&:payment_method).any?(&:payment_profiles_supported?)
+    end
+
+    # Used by the checkout state machine to check for unprocessed payments
+    # The Order should be unable to proceed to complete if there are unprocessed
+    # payments and there is payment required.
+    def has_unprocessed_payments?
+      payments.with_state('checkout').reload.exists?
     end
 
     # Indicates the number of items in the order
@@ -201,15 +214,10 @@ module Spree
     # Array of totals grouped by Adjustment#label.  Useful for displaying price adjustments on an
     # invoice.  For example, you can display tax breakout for cases where tax is included in price.
     def price_adjustment_totals
-      totals = {}
-
-      price_adjustments.each do |adjustment|
-        label = adjustment.label
-        totals[label] ||= 0
-        totals[label] = totals[label] + adjustment.amount
-      end
-
-      totals
+      Hash[price_adjustments.group_by(&:label).map do |label, adjustments|
+        total = adjustments.sum(&:amount)
+        [label, Spree::Money.new(total, { :currency => currency })]
+      end]
     end
 
     def updater
@@ -355,8 +363,12 @@ module Spree
       end
     end
 
+    def can_ship?
+      self.complete? || self.resumed? || self.awaiting_return? || self.returned?
+    end
+
     def credit_cards
-      credit_card_ids = payments.from_credit_card.map(&:source_id).uniq
+      credit_card_ids = payments.from_credit_card.pluck(:source_id).uniq
       CreditCard.scoped(:conditions => { :id => credit_card_ids })
     end
 
@@ -403,23 +415,8 @@ module Spree
     end
 
     def rate_hash
-      return @rate_hash if @rate_hash.present?
-
-      # reserve one slot for each shipping method computation
-      computed_costs = Array.new(available_shipping_methods(:front_end).size)
-
-      # create all the threads and kick off their execution
-      threads = available_shipping_methods(:front_end).each_with_index.map do |ship_method, index|
-        Thread.new { computed_costs[index] = [ship_method, ship_method.calculator.compute(self)] }
-      end      
-
-      # wait for all threads to finish
-      threads.map(&:join)
-
-      # now consolidate and memoize the threaded results
-      @rate_hash ||= computed_costs.map do |pair|
-        ship_method,cost = *pair
-        next unless cost
+      @rate_hash ||= available_shipping_methods.collect do |ship_method|
+        next unless cost = ship_method.calculator.compute(self)
         ShippingRate.new( :id => ship_method.id,
                           :shipping_method => ship_method,
                           :name => ship_method.name,
@@ -432,20 +429,8 @@ module Spree
       payment_state == 'paid'
     end
 
-    def payment
-      payments.first
-    end
-
     def available_payment_methods
-      @available_payment_methods ||= PaymentMethod.available
-    end
-
-    def payment_method
-      if payment and payment.payment_method
-        payment.payment_method
-      else
-        available_payment_methods.first
-      end
+      @available_payment_methods ||= PaymentMethod.available(:front_end)
     end
 
     def pending_payments

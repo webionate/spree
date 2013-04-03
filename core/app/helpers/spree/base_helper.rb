@@ -13,7 +13,7 @@ module Spree
     end
 
     def link_to_cart(text = nil)
-      return "" if current_spree_page?(cart_path)
+      return "" if current_spree_page?(spree.cart_path)
 
       text = text ? h(text) : t('cart')
       css_class = nil
@@ -26,7 +26,7 @@ module Spree
         css_class = 'full'
       end
 
-      link_to text, cart_path, :class => css_class
+      link_to text, spree.cart_path, :class => css_class
     end
 
     # human readable list of variant options
@@ -56,7 +56,7 @@ module Spree
       end
 
       if meta[:description].blank? && object.kind_of?(Spree::Product)
-        meta[:description] = strip_tags(object.description)
+        meta[:description] = strip_tags(truncate(object.description, :length => 160, :separator => ' '))
       end
 
       meta.reverse_merge!({
@@ -75,7 +75,7 @@ module Spree
     end
 
     def logo(image_path=Spree::Config[:logo])
-      link_to image_tag(image_path), root_path
+      link_to image_tag(image_path), spree.root_path
     end
 
     def flash_messages(opts = {})
@@ -92,7 +92,7 @@ module Spree
     def breadcrumbs(taxon, separator="&nbsp;&raquo;&nbsp;")
       return "" if current_page?("/") || taxon.nil?
       separator = raw(separator)
-      crumbs = [content_tag(:li, link_to(t(:home) , root_path) + separator)]
+      crumbs = [content_tag(:li, link_to(t(:home) , spree.root_path) + separator)]
       if taxon
         crumbs << content_tag(:li, link_to(t(:products) , products_path) + separator)
         crumbs << taxon.ancestors.collect { |ancestor| content_tag(:li, link_to(ancestor.name , seo_url(ancestor)) + separator) } unless taxon.ancestors.empty?
@@ -127,7 +127,7 @@ module Spree
       end
 
       countries.collect do |country|
-        country.name = I18n.t(country.iso, :scope => 'countries', :default => country.name)
+        country.name = I18n.t(country.iso, :scope => 'country_names', :default => country.name)
         country
       end.sort { |a, b| a.name <=> b.name }
     end

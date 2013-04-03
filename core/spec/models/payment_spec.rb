@@ -57,6 +57,14 @@ describe Spree::Payment do
 
   end
 
+  context 'invalidate' do
+    it 'should transition from checkout to invalid' do
+      payment.state = 'checkout'
+      payment.invalidate
+      payment.state.should eq('invalid')
+    end
+  end
+
   context "processing" do
     before do
       payment.stub(:update_order)
@@ -65,13 +73,13 @@ describe Spree::Payment do
 
     context "#process!" do
       it "should purchase if with auto_capture" do
-        Spree::Config[:auto_capture] = true
+        payment.payment_method.should_receive(:auto_capture?).and_return(true)
         payment.should_receive(:purchase!)
         payment.process!
       end
 
       it "should authorize without auto_capture" do
-        Spree::Config[:auto_capture] = false
+        payment.payment_method.should_receive(:auto_capture?).and_return(false)
         payment.should_receive(:authorize!)
         payment.process!
       end
@@ -79,6 +87,12 @@ describe Spree::Payment do
       it "should make the state 'processing'" do
         payment.should_receive(:started_processing!)
         payment.process!
+      end
+
+      it "should invalidate if payment method doesnt support source" do
+        payment.payment_method.should_receive(:supports?).with(payment.source).and_return(false)
+        lambda { payment.process!}.should raise_error(Spree::Core::GatewayError)
+        payment.state.should eq('invalid')
       end
 
     end
@@ -552,6 +566,23 @@ describe Spree::Payment do
   context "#display_amount" do
     it "returns a Spree::Money for this amount" do
       payment.display_amount.should == Spree::Money.new(payment.amount)
+    end
+  end
+
+  # Regression test for #2216
+  context "#gateway_options" do
+    before { order.stub(:last_ip_address => "192.168.1.1") }
+
+    it "contains an IP" do
+      payment.gateway_options[:ip].should == order.last_ip_address
+    end
+  end
+
+  # Regression test for #1998
+  context "#set_unique_identifier" do
+    it "sets a unique identifier on create" do
+      payment.run_callbacks(:save)
+      payment.identifier.should_not be_blank
     end
   end
 end

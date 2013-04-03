@@ -9,11 +9,22 @@ module Spree
       update.before :update_before
 
       def show
+        session[:return_to] ||= request.referer
         redirect_to( :action => :edit )
       end
 
       def index
+        session[:return_to] = request.url
         respond_with(@collection)
+      end
+
+      def search
+        if params[:ids]
+          @products = Spree::Product.where(:id => params[:ids].split(","))
+        else
+          search_params = { :name_cont => params[:q], :sku_cont => params[:q] }
+          @products = Spree::Product.ransack(search_params.merge(:m => 'or')).result
+        end
       end
 
       def update
@@ -24,7 +35,7 @@ module Spree
       end
 
       def destroy
-        @product = Product.where(:permalink => params[:id]).first!
+        @product = Product.find_by_permalink!(params[:id])
         @product.delete
 
         flash.notice = I18n.t('notice_messages.product_deleted')

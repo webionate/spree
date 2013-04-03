@@ -4,8 +4,8 @@ module Spree
   # order that this approach is waranted.
 
   # Much of this file, especially the update action is overriden in the promo gem.
-  # This is to allow for the promo behavior but also allow the promo gem to be 
-  # removed if the functionality is not needed. 
+  # This is to allow for the promo behavior but also allow the promo gem to be
+  # removed if the functionality is not needed.
 
   class CheckoutController < Spree::StoreController
     ssl_required
@@ -13,12 +13,15 @@ module Spree
     before_filter :load_order
     before_filter :ensure_valid_state
     before_filter :associate_user
+    before_filter :check_authorization
     rescue_from Spree::Core::GatewayError, :with => :rescue_from_spree_gateway_error
 
     respond_to :html
 
+    helper 'spree/orders'
+
     # Updates the order and advances to the next state (when possible.)
-    # Overriden by the promo gem if it exists. 
+    # Overriden by the promo gem if it exists.
     def update
       if @order.update_attributes(object_params)
         fire_event('spree.checkout.update')
@@ -46,8 +49,8 @@ module Spree
     private
       def ensure_valid_state
         unless skip_state_validation?
-          if (params[:state] && !@order.checkout_steps.include?(params[:state])) ||
-             (!params[:state] && !@order.checkout_steps.include?(@order.state))
+          if (params[:state] && !@order.has_checkout_step?(params[:state])) ||
+             (!params[:state] && !@order.has_checkout_step?(@order.state))
             @order.state = 'cart'
             redirect_to checkout_state_path(@order.checkout_steps.first)
           end
@@ -65,7 +68,11 @@ module Spree
         redirect_to cart_path and return unless @order and @order.checkout_allowed?
         raise_insufficient_quantity and return if @order.insufficient_stock_lines.present?
         redirect_to cart_path and return if @order.completed?
-        @order.state = params[:state] if params[:state]
+
+        if params[:state]
+          redirect_to checkout_state_path(@order.state) if @order.can_go_to_state?(params[:state]) && !skip_state_validation?
+          @order.state = params[:state]
+        end
         state_callback(:before)
       end
 
@@ -107,10 +114,6 @@ module Spree
         @order.shipping_method ||= (@order.rate_hash.first && @order.rate_hash.first[:shipping_method])
       end
 
-      def before_payment
-        current_order.payments.destroy_all if request.put?
-      end
-
       def after_complete
         session[:order_id] = nil
       end
@@ -118,6 +121,10 @@ module Spree
       def rescue_from_spree_gateway_error
         flash[:error] = t(:spree_gateway_error_flash_for_checkout)
         render :edit
+      end
+
+      def check_authorization
+        authorize!(:edit, current_order, session[:access_token])
       end
   end
 end

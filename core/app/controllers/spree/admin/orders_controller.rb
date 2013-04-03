@@ -34,7 +34,7 @@ module Spree
           params[:q][:completed_at_lt] = params[:q].delete(:created_at_lt)
         end
 
-        @search = Order.ransack(params[:q])
+        @search = Order.accessible_by(current_ability, :index).ransack(params[:q])
         @orders = @search.result.includes([:user, :shipments, :payments]).
           page(params[:page]).
           per(params[:per_page] || Spree::Config[:orders_per_page])
@@ -111,6 +111,7 @@ module Spree
 
         def load_order
           @order = Order.find_by_number!(params[:id], :include => :adjustments) if params[:id]
+          authorize! action, @order
         end
 
         # Used for extensions which need to provide their own custom event links on the order details view.
@@ -118,6 +119,9 @@ module Spree
           @order_events = %w{cancel resume}
         end
 
+        def model_class
+          Spree::Order
+        end
     end
   end
 end

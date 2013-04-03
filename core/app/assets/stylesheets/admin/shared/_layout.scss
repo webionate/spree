@@ -60,11 +60,12 @@
 
 #content-header {
   padding: 15px 0;
-  background-color: very-light($color-3);
+  background-color: very-light($color-3, 4);
   border-bottom: 1px solid $color-border;
 
   .page-title {
     font-size: 20px;
+    -webkit-font-smoothing: antialiased;
   }
   .page-actions {
     text-align: right;

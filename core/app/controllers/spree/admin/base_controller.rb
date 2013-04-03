@@ -11,14 +11,18 @@ module Spree
       before_filter :authorize_admin
 
       protected
+        def action
+          params[:action].to_sym
+        end
+
         def authorize_admin
-          begin
-            record = model_class.new
-          rescue
-            record = Object.new
+          if respond_to?(:model_class, true) && model_class
+            record = model_class
+          else
+            record = Object
           end
           authorize! :admin, record
-          authorize! params[:action].to_sym, record
+          authorize! action, record
         end
 
         def check_alerts

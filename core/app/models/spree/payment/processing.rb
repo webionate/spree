@@ -5,10 +5,15 @@ module Spree
         if payment_method && payment_method.source_required?
           if source
             if !processing?
-              if Spree::Config[:auto_capture]
-                purchase!
+              if payment_method.supports?(source)
+                if payment_method.auto_capture?
+                  purchase!
+                else
+                  authorize!
+                end
               else
-                authorize!
+                invalidate!
+                raise Core::GatewayError.new(I18n.t(:payment_method_not_supported))
               end
             end
           else
@@ -110,8 +115,12 @@ module Spree
     def gateway_options
       options = { :email    => order.email,
                   :customer => order.email,
-                  :ip       => '192.168.1.100', # TODO: Use an actual IP
-                  :order_id => order.number }
+                  :ip       => order.last_ip_address,
+                  # Need to pass in a unique identifier here to make some
+                  # payment gateways happy.
+                  #
+                  # For more information, please see Spree::Payment#set_unique_identifier
+                  :order_id => gateway_order_id }
 
       options.merge!({ :shipping => order.ship_total * 100,
                        :tax      => order.tax_total * 100,
@@ -187,5 +196,9 @@ module Spree
       raise Core::GatewayError.new(message)
     end
 
+    # The unique identifier to be passed in to the payment gateway
+    def gateway_order_id
+      "#{order.number}-#{self.identifier}"
+    end
   end
 end

@@ -34,11 +34,6 @@ module Spree
         :total => order.total
       })
 
-      #ensure checkout payment always matches order total
-      if order.payment and order.payment.checkout? and order.payment.amount != order.total
-        order.payment.update_attributes_without_callbacks(:amount => order.total)
-      end
-
       update_hooks.each { |hook| order.send hook }
     end
 
@@ -69,18 +64,18 @@ module Spree
       if order.backordered?
         order.shipment_state = 'backorder'
       else
-        order.shipment_state =
-        case shipments.count
-        when 0
-          nil
-        when shipments.shipped.count
-          'shipped'
-        when shipments.ready.count
-          'ready'
-        when shipments.pending.count
-          'pending'
+        # get all the shipment states for this order
+        shipment_states = shipments.states
+        if shipment_states.size > 1
+          # multiple shiment states means it's most likely partially shipped
+          order.shipment_state = 'partial'
         else
-          'partial'
+          # will return nil if no shipments are found
+          order.shipment_state = shipment_states.first
+          if order.shipment_state && order.inventory_units.where(:shipment_id => nil).exists?
+            # shipments exist but there are unassigned inventory units
+            order.shipment_state = 'partial'
+          end
         end
       end
 

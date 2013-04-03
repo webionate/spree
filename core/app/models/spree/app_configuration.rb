@@ -41,11 +41,12 @@ module Spree
     preference :currency, :string, :default => "USD"
     preference :currency_symbol_position, :string, :default => "before"
     preference :display_currency, :boolean, :default => false
-    preference :default_country_id, :integer, :default => 214
+    preference :default_country_id, :integer
     preference :default_meta_description, :string, :default => 'Spree demo site'
     preference :default_meta_keywords, :string, :default => 'spree, demo'
     preference :default_seo_title, :string, :default => ''
     preference :dismissed_spree_alerts, :string, :default => ''
+    preference :emails_sent_from, :string, :default => 'spree@example.com'
     preference :hide_cents, :boolean, :default => false
     preference :last_check_for_spree_alerts, :string, :default => nil
     preference :layout, :string, :default => 'spree/layouts/spree_application'
@@ -61,6 +62,7 @@ module Spree
     preference :show_only_complete_orders_by_default, :boolean, :default => true
     preference :show_zero_stock_products, :boolean, :default => true
     preference :show_variant_full_price, :boolean, :default => false #Displays variant full price or difference with product price. Default false to be compatible with older behavior
+    preference :show_products_without_price, :boolean, :default => false
     preference :site_name, :string, :default => 'Spree Demo Site'
     preference :site_url, :string, :default => 'demo.spreecommerce.com'
     preference :tax_using_ship_address, :boolean, :default => true

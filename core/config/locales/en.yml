@@ -1,7 +1,7 @@
 ---
 en:
-  no: "No"
-  yes: "Yes"
+  say_no: "No"
+  say_yes: "Yes"
   a_copy_of_all_mail_will_be_sent_to_the_following_addresses: A copy of all mail be sent to the following addresses
   abbreviation: Abbreviation
   access_denied: "Access Denied"
@@ -260,9 +260,10 @@ en:
   assign_taxon: "Assign Taxon"
   assign_taxons: "Assign Taxons"
   attachment_default_style: "Attachments Style"
-  attachment_default_url: "Attachments URL"
+  attachment_default_url: "Attachments Default URL"
   attachment_path: "Attachments Path"
   attachment_styles: "Paperclip Styles"
+  attachment_url: "Attachments URL"
   authorization_failure: "Authorization Failure"
   authorized: Authorized
   availability: "Availability"
@@ -278,7 +279,7 @@ en:
   back_to_payment_methods_list: "Back To Payment Methods List"
   back_to_payments_list: "Back To Payments List"
   back_to_products_list: "Back To Products List"
-  back_to_properties_list: "Back To Products List"
+  back_to_properties_list: "Back To Properties List"
   back_to_prototypes_list: "Back To Prototypes List"
   back_to_reports_list: "Back To Reports List"
   back_to_shipping_categories: "Back To Shipping Categories"
@@ -321,6 +322,7 @@ en:
   charges: Charges
   checkout: Checkout
   cheque: Cheque
+  choose_a_customer: "Choose a customer"
   city: City
   clone: Clone
   code: Code
@@ -412,8 +414,6 @@ en:
   email_server_settings_description: "Set email server settings."
   empty: "Empty"
   empty_cart: "Empty Cart"
-  enable_login_via_login_password: "Use standard email/password"
-  enable_login_via_openid: "Use OpenID instead"
   enable_mail_delivery: Enable Mail Delivery
   ending_in: "Ending in"
   enter_exactly_as_shown_on_card: Please enter exactly as shown on the card
@@ -441,6 +441,8 @@ en:
       user:
         signup: 'User signup'
       page_view: "Static page viewed"
+  exceptions:
+    count_on_hand_setter: "Cannot set count_on_hand manually, as it is set automatically by the recalculate_count_on_hand callback. Please use `update_column(:count_on_hand, value)` instead."
   existing_customer: "Existing Customer"
   expiration: "Expiration"
   expiration_month: "Expiration Month"
@@ -495,7 +497,7 @@ en:
   image_settings: "Image Settings"
   image_settings_description: "Image Settings Description"
   image_settings_updated: "Image Settings successfully updated."
-  image_settings_warning: "You will need to regenerate thumbnails if you update the paperclip styles. Use rake paperclip:refresh:thumbnails to do this."
+  image_settings_warning: "You will need to regenerate thumbnails if you update the paperclip styles. Use rake paperclip:refresh:thumbnails CLASS=Spree::Image to do this."
   in_progress: "In Progress"
   include_in_shipment: Include in Shipment
   included_in_other_shipment: Included in another Shipment
@@ -533,14 +535,6 @@ en:
   live: "Live"
   loading: Loading
   locale_changed: "Locale Changed"
-  logged_in_as: "Logged in as"
-  logged_in_succesfully: "Logged in successfully"
-  logged_out: "You have been logged out."
-  login: Login
-  login_as_existing: "Login as Existing Customer"
-  login_failed: "Login authentication failed."
-  login_name: Login
-  logout: Logout
   look_for_similar_items: Look for similar items
   maestro_or_solo_cards: Maestro/Solo cards
   mail_delivery_enabled: "Mail delivery is enabled"
@@ -603,6 +597,12 @@ en:
   no_match_found: "No Match Found"
   no_products_found: "No products found"
   no_results: "No results"
+  no_promotions_found: "No promotions found"
+  no_payment_methods_found: "No payment methods found"
+  no_results: "No results"
+  no_shipments_for_this_order: "There are no shipments for this order"
+  no_shipping_methods_found: "No shipping methods found"
+  no_trackers_found: "No Trackers Found"
   no_user_found: "No user was found with that email address"
   none: None
   none_available: "None Available"
@@ -642,16 +642,16 @@ en:
       dear_customer: "Dear Customer,"
       instructions: "Please review and retain the following order information for your records."
       order_summary: "Order Summary"
-      subtotal: "Subtotal:"
-      total: "Order Total:"
+      subtotal: "Subtotal: %{subtotal}"
+      total: "Order Total: %{total}"
       thanks: "Thank you for your business."
     cancel_email:
       subject: "Cancellation of Order"
       dear_customer: "Dear Customer,"
       instructions: "Your order has been CANCELED.  Please retain this cancellation information for your records."
       order_summary_canceled: "Order Summary [CANCELED]"
-      subtotal: "Subtotal:"
-      total: "Order Total:"
+      subtotal: "Subtotal: %{subtotal}"
+      total: "Order Total: %{total}"
   order_not_in_system: That order number is not valid on this site.
   order_number: Order
   order_operation_authorize: Authorize
@@ -699,6 +699,9 @@ en:
   pay: pay
   payment: Payment
   payment_actions: "Actions"
+  payment_counter:
+    one: "Payment #1"
+    other: "Payment #%{count}"
   payment_gateway: "Payment Gateway"
   payment_information: "Payment Information"
   payment_method: Payment Method
@@ -858,6 +861,7 @@ en:
         sentence: with property <em>%s</em> and value <em>%s</em>
   products: Products
   products_with_zero_inventory_display: "Products with a zero inventory will %{not} be displayed"
+  product_not_available_in_this_currency: "This product is not available in the selected currency."
   properties: Properties
   property: Property
   prototype: Prototype
@@ -1045,6 +1049,7 @@ en:
   tax_type: "Tax Type"
   taxon: Taxon
   taxon_edit: Edit Taxon
+  taxon_placeholder: "Add a Taxon"
   taxonomy: Taxonomy
   taxonomies: Taxonomies
   taxonomies_setting_description: "Create and manage taxonomies."
@@ -1061,7 +1066,6 @@ en:
   test_mode: Test Mode
   thank_you_for_your_order: "Thank you for your business.  Please print out a copy of this confirmation page for your records."
   there_were_problems_with_the_following_fields: "There were problems with the following fields"
-  this_file_language: "English (US)"
   thumbnail: "Thumbnail"
   to_add_variants_you_must_first_define: "To add variants, you must first define"
   to_state: "To State"
@@ -1097,12 +1101,12 @@ en:
   users: Users
   validate_on_profile_create: Validate on profile create
   validation:
-    cannot_be_greater_than_available_stock: "cannot be greater than available stock."
     cannot_be_less_than_shipped_units: "cannot be less than the number of shipped units."
-    cannot_destory_line_item_as_inventory_units_have_shipped: "Cannot destory line item as some inventory units have shipped."
+    cannot_destroy_line_item_as_inventory_units_have_shipped: "Cannot destroy line item as some inventory units have shipped."
     is_too_large: "is too large -- stock on hand cannot cover requested quantity!"
     must_be_int: "must be an integer"
     must_be_non_negative: "must be a non-negative value"
+    exceeds_available_stock: "exceeds available stock. Please ensure line items have a valid quantity."
   value: Value
   variant: Variant
   variants: Variants
@@ -1115,7 +1119,6 @@ en:
   welcome_to_sample_store: "Welcome to the sample store"
   what_is_a_cvv: "What is a (CVV) Credit Card Code?"
   what_is_this: "What's This?"
-  whats_this: "What's this"
   width: Width
   year: "Year"
   you_have_been_logged_out: "You have been logged out."

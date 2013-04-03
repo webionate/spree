@@ -79,10 +79,11 @@ module Spree
 
       def order
         @order ||= Order.find_by_number(params[:order_id])
+        authorize! action, @order
       end
 
       def shipment
-        @shipment ||= Shipment.find_by_number(params[:id])
+        @shipment ||= order.shipments.find_by_number(params[:id])
       end
 
       def build_shipment
@@ -91,6 +92,10 @@ module Spree
         @shipment.address ||= Address.new(:country_id => Spree::Config[:default_country_id])
         @shipment.shipping_method ||= order.shipping_method
         @shipment.attributes = params[:shipment]
+      end
+
+      def model_class
+        Spree::Shipment
       end
     end
   end

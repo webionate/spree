@@ -11,6 +11,7 @@ Dir["#{File.dirname(__FILE__)}/support/**/*.rb"].each {|f| require f}
 require 'database_cleaner'
 
 require 'spree/core/testing_support/factories'
+require 'spree/core/testing_support/capybara_ext'
 require 'spree/core/testing_support/controller_requests'
 require 'spree/core/testing_support/authorization_helpers'
 require 'spree/core/testing_support/preferences'
@@ -58,7 +59,7 @@ end
 
 shared_context "custom products" do
   before(:each) do
-    reset_spree_preferences do |config|
+    configure_spree_preferences do |config|
       config.allow_backorders = true
     end
 
@@ -101,7 +102,7 @@ shared_context "product prototype" do
   let(:product_attributes) do
     # FactoryGirl.attributes_for is un-deprecated!
     #   https://github.com/thoughtbot/factory_girl/issues/274#issuecomment-3592054
-    FactoryGirl.attributes_for(:simple_product)
+    FactoryGirl.attributes_for(:base_product)
   end
 
   let(:prototype) do

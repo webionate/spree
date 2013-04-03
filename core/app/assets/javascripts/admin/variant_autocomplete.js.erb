@@ -1,23 +1,24 @@
-//= require handlebars
 <%#encoding: UTF-8%>
 // variant autocompletion
 
 $(document).ready(function() {
-  window.variantTemplate = Handlebars.compile($('#variant_autocomplete_template').text());
+  if ($('#variant_autocomplete_template').length > 0) {
+    window.variantTemplate = Handlebars.compile($('#variant_autocomplete_template').text());
+  }
 })
 
 formatVariantResult = function(variant) {
-  if (variant["images"][0] != undefined) {
+  if (variant["images"][0] != undefined && variant["images"][0].image != undefined) {
     variant.image = variant.images[0].image.mini_url
   }
-  return variantTemplate({ variant: variant, translations: Spree.translations })
+  return variantTemplate({ variant: variant })
 }
 
 $.fn.variantAutocomplete = function() {
   this.parent().children(".options_placeholder").attr('id', this.parent().data('index'))
   this.select2({
     placeholder: "Select a variant",
-    minimumInputLength: 4,
+    minimumInputLength: 3,
     ajax: {
       url: Spree.routes.variants_search,
       datatype: 'json',
@@ -25,10 +26,7 @@ $.fn.variantAutocomplete = function() {
         return { q: term }
       },
       results: function (data, page) {
-        var variants = $.map(data['variants'], function(result) {
-          return result['variant']
-        })
-        return { results: variants }
+        return { results: data }
       }
     },
     formatResult: formatVariantResult,

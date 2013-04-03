@@ -2,8 +2,9 @@ module Spree
   class OrdersController < Spree::StoreController
     ssl_required :show
 
+    before_filter :check_authorization
     rescue_from ActiveRecord::RecordNotFound, :with => :render_404
-    helper 'spree/products'
+    helper 'spree/products', 'spree/orders'
 
     respond_to :html
 
@@ -39,32 +40,18 @@ module Spree
     end
 
     # Adds a new item to the order (creating a new order if none already exists)
-    #
-    # Parameters can be passed using the following possible parameter configurations:
-    #
-    # * Single variant/quantity pairing
-    # +:variants => { variant_id => quantity }+
-    #
-    # * Multiple products at once
-    # +:products => { product_id => variant_id, product_id => variant_id }, :quantity => quantity+
-    # +:products => { product_id => variant_id, product_id => variant_id }, :quantity => { variant_id => quantity, variant_id => quantity }+
     def populate
-      @order = current_order(true)
-
-      params[:products].each do |product_id,variant_id|
-        quantity = params[:quantity].to_i if !params[:quantity].is_a?(Hash)
-        quantity = params[:quantity][variant_id].to_i if params[:quantity].is_a?(Hash)
-        @order.add_variant(Variant.find(variant_id), quantity, current_currency) if quantity > 0
-      end if params[:products]
-
-      params[:variants].each do |variant_id, quantity|
-        quantity = quantity.to_i
-        @order.add_variant(Variant.find(variant_id), quantity, current_currency) if quantity > 0
-      end if params[:variants]
-
-      fire_event('spree.cart.add')
-      fire_event('spree.order.contents_changed')
-      respond_with(@order) { |format| format.html { redirect_to cart_path } }
+      populator = Spree::OrderPopulator.new(current_order(true), current_currency)
+      if populator.populate(params.slice(:products, :variants, :quantity))
+        fire_event('spree.cart.add')
+        fire_event('spree.order.contents_changed')
+        respond_with(@order) do |format|
+          format.html { redirect_to cart_path }
+        end
+      else
+        flash[:error] = populator.errors.full_messages.join(" ")
+        redirect_to :back
+      end
     end
 
     def empty
@@ -76,7 +63,19 @@ module Spree
     end
 
     def accurate_title
-      @order && @order.completed? ? "#{Order.model_name.human} #{@order.number}" : t(:shopping_cart)
+      @order && @order.completed? ? "#{t(:order)} #{@order.number}" : t(:shopping_cart)
     end
+
+    def check_authorization
+      session[:access_token] ||= params[:token]
+      order = Spree::Order.find_by_number(params[:id]) || current_order
+
+      if order
+        authorize! :edit, order, session[:access_token]
+      else
+        authorize! :create, Spree::Order
+      end
+    end
+
   end
 end

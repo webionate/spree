@@ -5,10 +5,6 @@ require 'spec_helper'
 describe Spree::Variant do
   let!(:variant) { create(:variant, :count_on_hand => 95) }
 
-  before(:each) do
-    reset_spree_preferences
-  end
-
   context "validations" do
     it "should validate price is greater than 0" do
       variant.price = -1
@@ -121,6 +117,7 @@ describe Spree::Variant do
       before { Spree::Config.set :track_inventory_levels => false }
 
       it "should raise an exception" do
+        variant = create(:base_variant)
         lambda { variant.on_hand = 100 }.should raise_error
       end
 
@@ -279,9 +276,9 @@ describe Spree::Variant do
   end
 
   context "#display_amount" do
-    it "retuns a Spree::Money" do
+    it "returns a Spree::Money" do
       variant.price = 21.22
-      variant.display_amount.should == "$21.22"
+      variant.display_amount.to_s.should == "$21.22"
     end
   end
 
@@ -299,14 +296,13 @@ describe Spree::Variant do
     before do
       variant.prices << create(:price, :variant => variant, :currency => "EUR", :amount => 33.33)
     end
-
     subject { variant.price_in(currency).display_amount }
 
     context "when currency is not specified" do
       let(:currency) { nil }
 
-      it "returns nil" do
-        subject.should be_nil
+      it "returns 0" do
+        subject.to_s.should == "$0.00"
       end
     end
 
@@ -314,7 +310,7 @@ describe Spree::Variant do
       let(:currency) { 'EUR' }
 
       it "returns the value in the EUR" do
-        subject.should == "€33.33"
+        subject.to_s.should == "€33.33"
       end
     end
 
@@ -322,7 +318,7 @@ describe Spree::Variant do
       let(:currency) { 'USD' }
 
       it "returns the value in the USD" do
-        subject.should == "$19.99"
+        subject.to_s.should == "$19.99"
       end
     end
   end
@@ -356,6 +352,21 @@ describe Spree::Variant do
       it "returns the value in the USD" do
         subject.should == 19.99
       end
+    end
+  end
+
+  # Regression test for #2432
+  describe 'options_text' do
+    before do
+      option_type = double("OptionType", :presentation => "Foo")
+      option_values = [double("OptionValue", :option_type => option_type, :presentation => "bar")]
+      variant.stub(:option_values).and_return(option_values)
+    end
+
+    it "orders options correctly" do
+      variant.option_values.should_receive(:joins).with(:option_type).and_return(scope = stub)
+      scope.should_receive(:order).with('spree_option_types.position asc').and_return(variant.option_values)
+      variant.options_text
     end
   end
 end

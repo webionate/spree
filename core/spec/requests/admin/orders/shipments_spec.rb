@@ -9,7 +9,7 @@ describe "Shipments" do
     # Clear all the shipments and then re-create them in this test
 
     order.shipments.delete_all
-    reset_spree_preferences do |config|
+    configure_spree_preferences do |config|
       config.allow_backorders = true
     end
 
@@ -23,7 +23,10 @@ describe "Shipments" do
     click_link "Shipments"
 
     click_on "New Shipment"
-    check "inventory_units_1"
+    within "table.index" do
+      # Check the first inventory unit box
+      find("input.inventory_unit").set(true)
+    end
     click_button "Create"
     page.should have_content("successfully created!")
     order.reload

@@ -24,7 +24,8 @@ module Spree
     has_many :product_properties, :dependent => :destroy
     has_many :properties, :through => :product_properties
 
-    has_and_belongs_to_many :taxons, :join_table => 'spree_products_taxons'
+    has_many :classifications, :dependent => :delete_all
+    has_many :taxons, :through => :classifications
 
     belongs_to :tax_category
     belongs_to :shipping_category
@@ -130,6 +131,10 @@ module Spree
       self[:on_demand] = new_on_demand
     end
 
+    def count_on_hand=(value)
+      raise I18n.t('exceptions.count_on_hand_setter')
+    end
+
     # Returns true if there are inventory units (any variant) with "on_hand" state for this product
     # Variants take precedence over master
     def has_stock?
@@ -162,7 +167,7 @@ module Spree
       return if option_values_hash.nil?
       option_values_hash.keys.map(&:to_i).each do |id|
         self.option_type_ids << id unless option_type_ids.include?(id)
-        product_option_types.create({:option_type_id => id}, :without_protection => true) unless product_option_types.map(&:option_type_id).include?(id)
+        product_option_types.create({:option_type_id => id}, :without_protection => true) unless product_option_types.pluck(:option_type_id).include?(id)
       end
     end
 
@@ -232,10 +237,7 @@ module Spree
 
     def set_property(property_name, property_value)
       ActiveRecord::Base.transaction do
-        property = Property.where(:name => property_name).first_or_initialize
-        property.presentation = property_name
-        property.save!
-
+        property = Property.where(:name => property_name).first_or_create!(:presentation => property_name)
         product_property = ProductProperty.where(:product_id => id, :property_id => property.id).first_or_initialize
         product_property.value = property_value
         product_property.save!
@@ -266,9 +268,12 @@ module Spree
       end
 
       def recalculate_count_on_hand
-        product_count_on_hand = has_variants? ?
-          variants.sum(:count_on_hand) : (master ? master.count_on_hand : 0)
-        self.count_on_hand = product_count_on_hand
+        value = if has_variants?
+          variants.sum(:count_on_hand)
+        else
+          (master ? master.count_on_hand : 0)
+        end
+        self[:count_on_hand] = value
       end
 
       # the master on_hand is meaningless once a product has variants as the inventory

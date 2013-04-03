@@ -3,14 +3,18 @@
 require 'spec_helper'
 
 describe Spree::Product do
-  before(:each) do
-    reset_spree_preferences
-  end
-
   context "#on_hand=" do
     it "should not complain of a missing master" do
       product = Spree::Product.new
       product.on_hand = 5
+    end
+  end
+
+  context "#count_on_hand=" do
+    it "cannot be set manually" do
+      product = Spree::Product.new
+      setter = lambda { product.count_on_hand = 5 }
+      setter.should raise_error(I18n.t('exceptions.count_on_hand_setter'))
     end
   end
 
@@ -113,7 +117,7 @@ describe Spree::Product do
         before { Spree::Config[:display_currency] = true }
 
         it "shows the currency" do
-          product.display_price.should == "$10.55 USD"
+          product.display_price.to_s.should == "$10.55 USD"
         end
       end
 
@@ -121,7 +125,7 @@ describe Spree::Product do
         before { Spree::Config[:display_currency] = false }
 
         it "does not include the currency" do
-          product.display_price.should == "$10.55"
+          product.display_price.to_s.should == "$10.55"
         end
       end
 
@@ -301,6 +305,16 @@ describe Spree::Product do
         product.property('the_prop_new').should == 'value'
       }.should change { product.properties.length }.by(1)
     end
+
+    # Regression test for #2455
+    it "should not overwrite properties' presentation names" do
+      product = FactoryGirl.create :product
+      Spree::Property.where(:name => 'foo').first_or_create!(:presentation => "Foo's Presentation Name")
+      product.set_property('foo', 'value1')
+      product.set_property('bar', 'value2')
+      Spree::Property.where(:name => 'foo').first.presentation.should == "Foo's Presentation Name"
+      Spree::Property.where(:name => 'bar').first.presentation.should == "bar"
+    end
   end
 
   context '#create' do
@@ -333,7 +347,7 @@ describe Spree::Product do
 
       it "should create product option types based on the prototype" do
         @product.save
-        @product.product_option_types.map(&:option_type_id).should == prototype.option_type_ids
+        @product.product_option_types.pluck(:option_type_id).should == prototype.option_type_ids
       end
 
       it "should create variants from an option values hash with one option type" do
@@ -414,9 +428,21 @@ describe Spree::Product do
     end
 
     it "should be sorted by position" do
-      product.images.map(&:alt).should eq(["position 1", "position 2"])
+      product.images.pluck(:alt).should eq(["position 1", "position 2"])
+    end
+  end
+
+  # Regression tests for #2352
+  context "classifications and taxons" do
+    it "is joined through classifications" do
+      reflection = Spree::Product.reflect_on_association(:taxons)
+      reflection.options[:through] = :classifications
     end
 
+    it "will delete all classifications" do
+      reflection = Spree::Product.reflect_on_association(:classifications)
+      reflection.options[:dependent] = :delete_all
+    end
   end
 
 end

@@ -1,3 +1,5 @@
+require 'rabl'
+
 module Spree
   module Core
     class Engine < ::Rails::Engine
@@ -14,12 +16,13 @@ module Spree
 
       config.to_prepare &method(:activate).to_proc
 
-      Rabl.configure do |config|
-        config.include_json_root = false
-        config.include_child_root = false
-      end
 
       config.after_initialize do
+        Rabl.configure do |config|
+          config.include_json_root = false
+          config.include_child_root = false
+        end
+
         ActiveSupport::Notifications.subscribe(/^spree\./) do |*args|
           event_name, start_time, end_time, id, payload = args
           Activator.active.event_name_starts_with(event_name).each do |activator|
@@ -70,7 +73,11 @@ module Spree
 
       # filter sensitive information during logging
       initializer "spree.params.filter" do |app|
-        app.config.filter_parameters += [:password, :password_confirmation, :number]
+        app.config.filter_parameters += [
+          :password,
+          :password_confirmation,
+          :number,
+          :verification_value]
       end
 
       # sets the manifests / assets to be precompiled, even when initialize_on_precompile is false

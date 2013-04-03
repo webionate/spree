@@ -6,8 +6,6 @@ Spree::Core::Engine.routes.draw do
 
   match '/locale/set', :to => 'locale#set'
 
-  resources :tax_categories
-
   resources :states, :only => :index
   resources :countries, :only => :index
 
@@ -22,29 +20,15 @@ Spree::Core::Engine.routes.draw do
   end
 
   get '/orders/populate', :via => :get, :to => populate_redirect
+  match '/orders/:id/token/:token' => 'orders#show', :via => :get, :as => :token_order
 
   resources :orders do
     post :populate, :on => :collection
-
-    resources :line_items
-
-    resources :shipments do
-      member do
-        get :shipping_method
-      end
-    end
-
   end
+
   get '/cart', :to => 'orders#edit', :as => :cart
   put '/cart', :to => 'orders#update', :as => :update_cart
   put '/cart/empty', :to => 'orders#empty', :as => :empty_cart
-
-  resources :shipments do
-    member do
-      get :shipping_method
-      put :shipping_method
-    end
-  end
 
   # route globbing for pretty nested taxon and product paths
   match '/t/*id', :to => 'taxons#show', :as => :nested_taxons
@@ -64,8 +48,17 @@ Spree::Core::Engine.routes.draw do
     end
     resources :states
     resources :tax_categories
+
     resources :products do
-      resources :product_properties
+      collection do
+        get :search
+      end
+
+      resources :product_properties do
+        collection do
+          post :update_positions
+        end
+      end
       resources :images do
         collection do
           post :update_positions
@@ -90,11 +83,15 @@ Spree::Core::Engine.routes.draw do
       end
     end
 
+    delete '/option_values/:id', :to => "option_values#destroy", :as => :option_value
+
     resources :properties do
       collection do
         get :filtered
       end
     end
+
+    delete '/product_properties/:id', :to => "product_properties#destroy", :as => :product_property
 
     resources :prototypes do
       member do

@@ -27,11 +27,19 @@ describe "Product scopes" do
       before do
         variant = product.variants.create!({:price => 10, :count_on_hand => 300}, :without_protection => true)
         variant.update_column(:deleted_at, Time.now)
+        product.master.update_column(:deleted_at, Time.now)
       end
 
       it "does not include the deleted variant in on_hand summary" do
         Spree::Product.on_hand.should be_empty
       end
+    end
+  end
+
+  context "not_deleted" do
+    it "contains products 'deleted' in the future" do
+      product.update_column(:deleted_at, 1.day.from_now)
+      Spree::Product.not_deleted.should include(product)
     end
   end
 end

@@ -4,7 +4,9 @@ describe "Checkout" do
   stub_authorization!
 
   context "visitor makes checkout as guest without registration", :js => true do
+    let(:country) { create(:country, :name => "Kangaland",:states_required => true) }
     before do
+      create(:state, :name => "Victoria", :country => country)
       @product = create(:product, :name => "RoR Mug")
       create(:zone)
       create(:shipping_method)
@@ -32,8 +34,8 @@ describe "Checkout" do
         fill_in "Street Address", :with => "1 John Street"
         fill_in "City", :with => "City of John"
         fill_in "Zip", :with => "01337"
-        select "United States", :from => "Country"
-        select "Alaska", :from => "order[bill_address_attributes][state_id]"
+        select country.name, :from => "Country"
+        select country.states.first.name, :from => "order[bill_address_attributes][state_id]"
         fill_in "Phone", :with => "555-555-5555"
         check "Use Billing Address"
 
@@ -59,29 +61,23 @@ describe "Checkout" do
     # CheckoutController
     context "on the cart page" do
       it "can enter a coupon code and receives success notification" do
-        fill_in "Coupon code", :with => "onetwo"
+        # Using the ID of the field here because there isn't a corresponding label
+        fill_in "order_coupon_code", :with => "onetwo"
         click_button "Apply"
         page.should have_content(I18n.t(:coupon_code_applied))
       end
 
       it "can enter a promotion code with both upper and lower case letters" do
-        fill_in "Coupon code", :with => "ONETwO"
+        fill_in "order_coupon_code", :with => "ONETwO"
         click_button "Apply"
         page.should have_content(I18n.t(:coupon_code_applied))
-      end
-
-      it "cannot enter a promotion code that was created after the order" do
-        promotion.update_column(:created_at, 1.day.from_now)
-        fill_in "Coupon code", :with => "onetwo"
-        click_button "Apply"
-        page.should have_content(I18n.t(:coupon_code_not_found))
       end
 
       it "informs the user about a coupon code which has exceeded its usage" do
         promotion.update_column(:usage_limit, 5)
         promotion.class.any_instance.stub(:credits_count => 10)
 
-        fill_in "Coupon code", :with => "onetwo"
+        fill_in "order_coupon_code", :with => "onetwo"
         click_button "Apply"
         page.should have_content(I18n.t(:coupon_code_max_usage))
       end
@@ -92,11 +88,11 @@ describe "Checkout" do
 
         visit spree.cart_path
 
-        fill_in "Coupon code", :with => "onefive"
+        fill_in "order_coupon_code", :with => "onefive"
         click_button "Apply"
         page.should have_content(I18n.t(:coupon_code_applied))
 
-        fill_in "Coupon code", :with => "onetwo"
+        fill_in "order_coupon_code", :with => "onetwo"
         click_button "Apply"
         page.should have_content(I18n.t(:coupon_code_better_exists))
       end
@@ -104,7 +100,7 @@ describe "Checkout" do
       it "informs the user if the coupon code is not eligible" do
         promotion.rules.first.preferred_amount = 100
 
-        fill_in "Coupon code", :with => "onetwo"
+        fill_in "order_coupon_code", :with => "onetwo"
         click_button "Apply"
         page.should have_content(I18n.t(:coupon_code_not_eligible))
       end
@@ -114,7 +110,7 @@ describe "Checkout" do
         promotion.starts_at = Date.today.beginning_of_week.advance(:day => 3)
         promotion.save!
         
-        fill_in "Coupon code", :with => "onetwo"
+        fill_in "order_coupon_code", :with => "onetwo"
         click_button "Apply"
         page.should have_content(I18n.t(:coupon_code_expired))        
       end

@@ -9,10 +9,6 @@ class FakeCalculator < Spree::Calculator
 end
 
 describe Spree::Order do
-  before(:each) do
-    reset_spree_preferences
-  end
-
   let(:user) { stub_model(Spree::LegacyUser, :email => "spree@example.com") }
   let(:order) { stub_model(Spree::Order, :user => user) }
 
@@ -74,6 +70,35 @@ describe Spree::Order do
     end
   end
 
+  context "#can_ship?" do
+    let(:order) { Spree::Order.create }
+
+    it "should be true for order in the 'complete' state" do
+      order.stub(:complete? => true)
+      order.can_ship?.should be_true
+    end
+
+    it "should be true for order in the 'resumed' state" do
+      order.stub(:resumed? => true)
+      order.can_ship?.should be_true
+    end
+
+    it "should be true for an order in the 'awaiting return' state" do
+      order.stub(:awaiting_return? => true)
+      order.can_ship?.should be_true
+    end
+
+    it "should be true for an order in the 'returned' state" do
+      order.stub(:returned? => true)
+      order.can_ship?.should be_true
+    end
+
+    it "should be false if the order is neither in the 'complete' nor 'resumed' state" do
+      order.stub(:resumed? => false, :complete? => false)
+      order.can_ship?.should be_false
+    end
+  end
+
   context "#finalize!" do
     let(:order) { Spree::Order.create }
     it "should set completed_at" do
@@ -87,7 +112,7 @@ describe Spree::Order do
     end
 
     it "should change the shipment state to ready if order is paid" do
-      order.stub :shipping_method => mock_model(Spree::ShippingMethod, :create_adjustment => true)
+      order.stub :shipping_method => mock_model(Spree::ShippingMethod, :create_adjustment => true, :adjustment_label => "Shipping")
       order.create_shipment!
       order.stub(:paid? => true, :complete? => true)
       order.finalize!
@@ -178,10 +203,10 @@ describe Spree::Order do
     end
   end
 
-  context "#complete?" do
-    it "should indicate if order is complete" do
+  context "#completed?" do
+    it "should indicate if order is completed" do
       order.completed_at = nil
-      order.complete?.should be_false
+      order.completed?.should be_false
 
       order.completed_at = Time.now
       order.completed?.should be_true
@@ -200,20 +225,6 @@ describe Spree::Order do
       Spree::Config.set :track_inventory_levels => false
       order.stub_chain(:inventory_units, :backordered).and_return [mock_model(Spree::InventoryUnit)]
       order.backordered?.should be_false
-    end
-  end
-
-  context "#payment_method" do
-    it "should return payment.payment_method if payment is present" do
-      payments = [create(:payment)]
-      payments.stub(:completed => payments)
-      order.stub(:payments => payments)
-      order.payment_method.should == order.payments.first.payment_method
-    end
-
-    it "should return the first payment method from available_payment_methods if payment is not present" do
-      create(:payment_method, :environment => 'test')
-      order.payment_method.should == order.available_payment_methods.first
     end
   end
 
@@ -306,7 +317,7 @@ describe Spree::Order do
 
     before { order.stub(:line_items => [line_item]) }
 
-    it "should return line_item that has insufficent stock on hand" do
+    it "should return line_item that has insufficient stock on hand" do
       order.insufficient_stock_lines.size.should == 1
       order.insufficient_stock_lines.include?(line_item).should be_true
     end
@@ -427,8 +438,8 @@ describe Spree::Order do
         line_items.count.should == 2
 
         # No guarantee on ordering of line items, so we do this:
-        line_items.map(&:quantity).should =~ [1,1]
-        line_items.map(&:variant_id).should =~ [variant.id, variant_2.id]
+        line_items.pluck(:quantity).should =~ [1, 1]
+        line_items.pluck(:variant_id).should =~ [variant.id, variant_2.id]
       end
     end
   end
@@ -457,6 +468,27 @@ describe Spree::Order do
       persisted_order.shipping_method = shipping_method
       persisted_order.next!
       persisted_order.state.should == "payment"
+    end
+  end
+
+  # Related to the fix for #2694
+  context "#has_unprocessed_payments?" do
+    let!(:persisted_order) { create(:order) }
+
+    context "with payments in the 'checkout' state" do
+      before do
+        create(:payment, :order => persisted_order, :state => 'checkout')
+      end
+
+      it "returns true" do
+        assert persisted_order.has_unprocessed_payments?
+      end
+    end
+
+    context "with no payments in the 'checkout' state" do
+      it "returns false" do
+        assert !persisted_order.has_unprocessed_payments?
+      end
     end
   end
 end
