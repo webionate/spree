@@ -1,69 +1,73 @@
 module Spree
-  class Variant < ActiveRecord::Base
-    belongs_to :product, :touch => true
+  class Variant < Spree::Base
+    acts_as_paranoid
+    acts_as_list scope: :product
 
-    delegate_belongs_to :product, :name, :description, :permalink, :available_on,
-                        :tax_category_id, :shipping_category_id, :meta_description,
-                        :meta_keywords, :tax_category
+    include Spree::DefaultPrice
 
-    attr_accessible :name, :presentation, :cost_price, :lock_version,
-                    :position, :on_demand, :on_hand, :option_value_ids,
-                    :product_id, :option_values_attributes, :price,
-                    :weight, :height, :width, :depth, :sku, :cost_currency
+    belongs_to :product, touch: true, class_name: 'Spree::Product', inverse_of: :variants
+    belongs_to :tax_category, class_name: 'Spree::TaxCategory'
 
-    has_many :inventory_units
-    has_many :line_items
-    has_and_belongs_to_many :option_values, :join_table => :spree_option_values_variants
-    has_many :images, :as => :viewable, :order => :position, :dependent => :destroy
+    delegate_belongs_to :product, :name, :description, :slug, :available_on,
+                        :shipping_category_id, :meta_description, :meta_keywords,
+                        :shipping_category
 
-    has_one :default_price,
-      :class_name => 'Spree::Price',
-      :conditions => proc { { :currency => Spree::Config[:currency] } },
-      :dependent => :destroy
+    has_many :inventory_units, inverse_of: :variant
+    has_many :line_items, inverse_of: :variant
+    has_many :orders, through: :line_items
 
-    delegate_belongs_to :default_price, :display_price, :display_amount, :price, :price=, :currency if Spree::Price.table_exists?
+    has_many :stock_items, dependent: :destroy, inverse_of: :variant
+    has_many :stock_locations, through: :stock_items
+    has_many :stock_movements, through: :stock_items
+
+    has_and_belongs_to_many :option_values, join_table: :spree_option_values_variants
+    has_many :images, -> { order(:position) }, as: :viewable, dependent: :destroy, class_name: "Spree::Image"
 
     has_many :prices,
-      :class_name => 'Spree::Price',
-      :dependent => :destroy
-
-    validate :check_price
-    validates :price, :numericality => { :greater_than_or_equal_to => 0 }, :presence => true, :if => proc { Spree::Config[:require_master_price] }
-    validates :cost_price, :numericality => { :greater_than_or_equal_to => 0, :allow_nil => true } if self.table_exists? && self.column_names.include?('cost_price')
-    validates :count_on_hand, :numericality => true
+      class_name: 'Spree::Price',
+      dependent: :destroy,
+      inverse_of: :variant
 
     before_validation :set_cost_currency
-    after_save :process_backorders
-    after_save :save_default_price
-    after_save :recalculate_product_on_hand, :if => :is_master?
 
-    # default variant scope only lists non-deleted variants
-    scope :deleted, lambda { where('deleted_at IS NOT NULL') }
+    validate :check_price
+
+    validates :cost_price, numericality: { greater_than_or_equal_to: 0, allow_nil: true }
+    validates :price,      numericality: { greater_than_or_equal_to: 0, allow_nil: true }
+    validates_uniqueness_of :sku, allow_blank: true, conditions: -> { where(deleted_at: nil) }
+
+    after_create :create_stock_items
+    after_create :set_master_out_of_stock, unless: :is_master?
+
+    after_touch :clear_in_stock_cache
+
+    scope :in_stock, -> { joins(:stock_items).where('count_on_hand > ? OR track_inventory = ?', 0, false) }
+
+    self.whitelisted_ransackable_associations = %w[option_values product prices default_price]
+    self.whitelisted_ransackable_attributes = %w[weight sku]
 
     def self.active(currency = nil)
-      joins(:prices).where(:deleted_at => nil).where('spree_prices.currency' => currency || Spree::Config[:currency]).where('spree_prices.amount IS NOT NULL')
+      joins(:prices).where(deleted_at: nil).where('spree_prices.currency' => currency || Spree::Config[:currency]).where('spree_prices.amount IS NOT NULL')
     end
 
-    # Returns number of inventory units for this variant (new records haven't been saved to database, yet)
-    def on_hand
-      if Spree::Config[:track_inventory_levels] && !self.on_demand
-        count_on_hand 
-      else
-        (1.0 / 0) # Infinity
-      end
+    def self.having_orders
+      joins(:line_items).distinct
     end
 
-    # set actual attribute
-    def on_hand=(new_level)
-      if !Spree::Config[:track_inventory_levels]
-        raise 'Cannot set on_hand value when Spree::Config[:track_inventory_levels] is false'
+    def tax_category
+      if self[:tax_category_id].nil?
+        product.tax_category
       else
-        self.count_on_hand = new_level unless self.on_demand
+        TaxCategory.find(self[:tax_category_id])
       end
     end
 
     def cost_price=(price)
-      self[:cost_price] = parse_price(price) if price.present?
+      self[:cost_price] = Spree::LocalizedNumber.parse(price) if price.present?
+    end
+
+    def weight=(weight)
+      self[:weight] = Spree::LocalizedNumber.parse(weight) if weight.present?
     end
 
     # returns number of units currently on backorder for this variant.
@@ -71,47 +75,56 @@ module Spree
       inventory_units.with_state('backordered').size
     end
 
-    # returns true if at least one inventory unit of this variant is "on_hand"
-    def in_stock?
-      if Spree::Config[:track_inventory_levels] && !self.on_demand
-        on_hand > 0 
-      else
-        true
-      end
-    end
-    alias in_stock in_stock?
-
-    # returns true if this variant is allowed to be placed on a new order
-    def available?
-      Spree::Config[:track_inventory_levels] ? (Spree::Config[:allow_backorders] || in_stock? || self.on_demand) : true
+    def is_backorderable?
+      Spree::Stock::Quantifier.new(self).backorderable?
     end
 
     def options_text
-      values = self.option_values.sort_by(&:position)
+      values = self.option_values.sort do |a, b|
+        a.option_type.position <=> b.option_type.position
+      end
 
-      values.map! do |ov|
+      values.to_a.map! do |ov|
         "#{ov.option_type.presentation}: #{ov.presentation}"
       end
 
-      values.to_sentence({ :words_connector => ", ", :two_words_connector => ", " })
+      values.to_sentence({ words_connector: ", ", two_words_connector: ", " })
     end
 
-    def gross_profit
-      cost_price.nil? ? 0 : (price - cost_price)
+    # Default to master name
+    def exchange_name
+      is_master? ? name : options_text
+    end
+
+    def descriptive_name
+      is_master? ? name + ' - Master' : name + ' - ' + options_text
     end
 
     # use deleted? rather than checking the attribute directly. this
     # allows extensions to override deleted? if they want to provide
     # their own definition.
     def deleted?
-      deleted_at
+      !!deleted_at
+    end
+
+    # Product may be created with deleted_at already set,
+    # which would make AR's default finder return nil.
+    # This is a stopgap for that little problem.
+    def product
+      Spree::Product.unscoped { super }
+    end
+
+    def options=(options = {})
+      options.each do |option|
+        set_option_value(option[:name], option[:value])
+      end
     end
 
     def set_option_value(opt_name, opt_value)
       # no option values on master
       return if self.is_master
 
-      option_type = Spree::OptionType.where(:name => opt_name).first_or_initialize do |o|
+      option_type = Spree::OptionType.where(name: opt_name).first_or_initialize do |o|
         o.presentation = opt_name
         o.save!
       end
@@ -125,11 +138,10 @@ module Spree
         # then we have to check to make sure that the product has the option type
         unless self.product.option_types.include? option_type
           self.product.option_types << option_type
-          self.product.save
         end
       end
 
-      option_value = Spree::OptionValue.where(:option_type_id => option_type.id, :name => opt_value).first_or_initialize do |o|
+      option_value = Spree::OptionValue.where(option_type_id: option_type.id, name: opt_value).first_or_initialize do |o|
         o.presentation = opt_value
         o.save!
       end
@@ -142,44 +154,74 @@ module Spree
       self.option_values.detect { |o| o.option_type.name == opt_name }.try(:presentation)
     end
 
-    def on_demand=(on_demand)
-      self[:on_demand] = on_demand
-      if on_demand
-        inventory_units.with_state('backordered').each(&:fill_backorder)
-      end
-    end
-
-    def has_default_price?
-      !self.default_price.nil?
-    end
-
     def price_in(currency)
-      prices.select{ |price| price.currency == currency }.first || Spree::Price.new(:variant_id => self.id, :currency => currency)
+      prices.select{ |price| price.currency == currency }.first || Spree::Price.new(variant_id: self.id, currency: currency)
     end
 
     def amount_in(currency)
       price_in(currency).try(:amount)
     end
 
+    def price_modifier_amount_in(currency, options = {})
+      return 0 unless options.present?
+
+      options.keys.map { |key|
+        m = "#{key}_price_modifier_amount_in".to_sym
+        if self.respond_to? m
+          self.send(m, currency, options[key])
+        else
+          0
+        end
+      }.sum
+    end
+
+    def price_modifier_amount(options = {})
+      return 0 unless options.present?
+
+      options.keys.map { |key|
+        m = "#{key}_price_modifier_amount".to_sym
+        if self.respond_to? m
+          self.send(m, options[key])
+        else
+          0
+        end
+      }.sum
+    end
+
+    def name_and_sku
+      "#{name} - #{sku}"
+    end
+
+    def sku_and_options_text
+      "#{sku} #{options_text}".strip
+    end
+
+    def in_stock?
+      Rails.cache.fetch(in_stock_cache_key) do
+        total_on_hand > 0
+      end
+    end
+
+    def can_supply?(quantity=1)
+      Spree::Stock::Quantifier.new(self).can_supply?(quantity)
+    end
+
+    def total_on_hand
+      Spree::Stock::Quantifier.new(self).total_on_hand
+    end
+
+    # Shortcut method to determine if inventory tracking is enabled for this variant
+    # This considers both variant tracking flag and site-wide inventory tracking settings
+    def should_track_inventory?
+      self.track_inventory? && Spree::Config.track_inventory_levels
+    end
+
     private
 
-      def process_backorders
-        if count_changes = changes['count_on_hand']
-          new_level = count_changes.last
-
-          if Spree::Config[:track_inventory_levels] && !self.on_demand
-            new_level = new_level.to_i
-
-            # update backorders if level is positive
-            if new_level > 0
-              # fill backordered orders before creating new units
-              backordered_units = inventory_units.with_state('backordered')
-              backordered_units.slice(0, new_level).each(&:fill_backorder)
-              new_level -= backordered_units.length
-            end
-
-            self.update_attribute_without_callbacks(:count_on_hand, new_level)
-          end
+      def set_master_out_of_stock
+        if product.master && product.master.in_stock?
+          product.master.stock_items.update_all(:backorderable => false)
+          product.master.stock_items.each { |item| item.reduce_count_on_hand_to_zero }
         end
       end
 
@@ -195,31 +237,22 @@ module Spree
         end
       end
 
-      # strips all non-price-like characters from the price, taking into account locale settings
-      def parse_price(price)
-        return price unless price.is_a?(String)
-
-        separator, delimiter = I18n.t([:'number.currency.format.separator', :'number.currency.format.delimiter'])
-        non_price_characters = /[^0-9\-#{separator}]/
-        price.gsub!(non_price_characters, '') # strip everything else first
-        price.gsub!(separator, '.') unless separator == '.' # then replace the locale-specific decimal separator with the standard separator if necessary
-
-        price.to_d
+      def set_cost_currency
+        self.cost_currency = Spree::Config[:currency] if cost_currency.nil? || cost_currency.empty?
       end
 
-      def recalculate_product_on_hand
-        on_hand = product.on_hand
-        if Spree::Config[:track_inventory_levels] && on_hand != (1.0 / 0) # Infinity
-          product.update_column(:count_on_hand, on_hand)
+      def create_stock_items
+        StockLocation.where(propagate_all_variants: true).each do |stock_location|
+          stock_location.propagate_variant(self)
         end
       end
 
-      def save_default_price
-        default_price.save if default_price && (default_price.changed? || default_price.new_record?)
+      def in_stock_cache_key
+        "variant-#{id}-in_stock"
       end
 
-      def set_cost_currency
-        self.cost_currency = Spree::Config[:currency] if cost_currency.nil? || cost_currency.empty?
+      def clear_in_stock_cache
+        Rails.cache.delete(in_stock_cache_key)
       end
   end
 end

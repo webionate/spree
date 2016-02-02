@@ -1,19 +1,53 @@
 require 'spec_helper'
+require 'spree/testing_support/bar_ability'
 
 module Spree
-  describe Api::OrdersController do
+  describe Api::OrdersController, :type => :controller do
     render_views
 
     let!(:order) { create(:order) }
-    let(:attributes) { [:number, :item_total, :total,
+    let(:variant) { create(:variant) }
+    let(:line_item) { create(:line_item) }
+
+    let(:attributes) { [:number, :item_total, :display_total, :total,
                         :state, :adjustment_total,
                         :user_id, :created_at, :updated_at,
                         :completed_at, :payment_total, :shipment_state,
-                        :payment_state, :email, :special_instructions] }
+                        :payment_state, :email, :special_instructions,
+                        :total_quantity, :display_item_total, :currency] }
 
+    let(:address_params) { { :country_id => Country.first.id, :state_id => State.first.id } }
+
+    let(:current_api_user) do
+      user = Spree.user_class.new(:email => "spree@example.com")
+      user.generate_spree_api_key!
+      user
+    end
 
     before do
       stub_authentication!
+    end
+
+    describe 'PATCH #update' do
+      subject { api_patch :update, id: order.to_param, order: { email: "foo@bar.com" } }
+
+      before do
+        allow_any_instance_of(Spree::Order).to receive_messages :user => current_api_user
+      end
+
+      it 'should be ok' do
+        expect(subject).to be_ok
+      end
+
+      it 'should not invoke OrderContents#update_cart' do
+        expect_any_instance_of(Spree::OrderContents).to_not receive(:update_cart)
+        subject
+      end
+
+      it 'should update the email' do
+        subject
+        expect(order.reload.email).to eq('foo@bar.com')
+      end
     end
 
     it "cannot view all orders" do
@@ -21,24 +55,193 @@ module Spree
       assert_unauthorized!
     end
 
+    context "the current api user is not persisted" do
+      let(:current_api_user) { Spree.user_class.new }
+
+      it "returns a 401" do
+        api_get :mine
+        expect(response.status).to eq(401)
+      end
+    end
+
+    context "the current api user is authenticated" do
+      let(:current_api_user) { order.user }
+      let(:order) { create(:order, line_items: [line_item]) }
+
+      it "can view all of their own orders" do
+        api_get :mine
+
+        expect(response.status).to eq(200)
+        expect(json_response["pages"]).to eq(1)
+        expect(json_response["current_page"]).to eq(1)
+        expect(json_response["orders"].length).to eq(1)
+        expect(json_response["orders"].first["number"]).to eq(order.number)
+        expect(json_response["orders"].first["line_items"].length).to eq(1)
+        expect(json_response["orders"].first["line_items"].first["id"]).to eq(line_item.id)
+      end
+
+      it "can filter the returned results" do
+        api_get :mine, q: {completed_at_not_null: 1}
+
+        expect(response.status).to eq(200)
+        expect(json_response["orders"].length).to eq(0)
+      end
+
+      it "returns orders in reverse chronological order by completed_at" do
+        order.update_columns completed_at: Time.now
+
+        order2 = Order.create user: order.user, completed_at: Time.now - 1.day
+        expect(order2.created_at).to be > order.created_at
+        order3 = Order.create user: order.user, completed_at: nil
+        expect(order3.created_at).to be > order2.created_at
+        order4 = Order.create user: order.user, completed_at: nil
+        expect(order4.created_at).to be > order3.created_at
+
+        api_get :mine
+        expect(response.status).to eq(200)
+        expect(json_response["pages"]).to eq(1)
+        expect(json_response["orders"].length).to eq(4)
+        expect(json_response["orders"][0]["number"]).to eq(order.number)
+        expect(json_response["orders"][1]["number"]).to eq(order2.number)
+        expect(json_response["orders"][2]["number"]).to eq(order4.number)
+        expect(json_response["orders"][3]["number"]).to eq(order3.number)
+      end
+    end
+
+    describe 'current' do
+      let(:current_api_user) { order.user }
+      let!(:order) { create(:order, line_items: [line_item]) }
+
+      subject do
+        api_get :current, format: 'json'
+      end
+
+      context "an incomplete order exists" do
+        it "returns that order" do
+          expect(JSON.parse(subject.body)['id']).to eq order.id
+          expect(subject).to be_success
+        end
+      end
+
+      context "multiple incomplete orders exist" do
+        it "returns the latest incomplete order" do
+          new_order = Spree::Order.create! user: order.user
+          expect(new_order.created_at).to be > order.created_at
+          expect(JSON.parse(subject.body)['id']).to eq new_order.id
+        end
+      end
+
+      context "an incomplete order does not exist" do
+
+        before do
+          order.update_attribute(:state, order_state)
+          order.update_attribute(:completed_at, 5.minutes.ago)
+        end
+
+        ["complete", "returned", "awaiting_return"].each do |order_state|
+          context "order is in the #{order_state} state" do
+            let(:order_state) { order_state }
+
+            it "returns no content" do
+              expect(subject.status).to eq 204
+              expect(subject.body).to be_blank
+            end
+          end
+        end
+      end
+    end
+
     it "can view their own order" do
-      Order.any_instance.stub :user => current_api_user
+      allow_any_instance_of(Order).to receive_messages :user => current_api_user
       api_get :show, :id => order.to_param
-      response.status.should == 200
-      json_response.should have_attributes(attributes)
+      expect(response.status).to eq(200)
+      expect(json_response).to have_attributes(attributes)
+      expect(json_response["adjustments"]).to be_empty
+    end
+
+    describe 'GET #show' do
+      let(:order) { create :order_with_line_items }
+      let(:adjustment) { FactoryGirl.create(:adjustment, order: order) }
+
+      subject { api_get :show, id: order.to_param }
+
+      before do
+        allow_any_instance_of(Order).to receive_messages :user => current_api_user
+      end
+
+      context 'when inventory information is present' do
+        it 'contains stock information on variant' do
+          subject
+          variant = json_response['line_items'][0]['variant']
+          expect(variant).to_not be_nil
+          expect(variant['in_stock']).to eq(false)
+          expect(variant['total_on_hand']).to eq(0)
+          expect(variant['is_backorderable']).to eq(true)
+          expect(variant['is_destroyed']).to eq(false)
+        end
+      end
+
+      context 'when shipment adjustments are present' do
+        before do
+          order.shipments.first.adjustments << adjustment
+        end
+
+        it 'contains adjustments on shipment' do
+          subject
+
+          # Test to insure shipment has adjustments
+          shipment = json_response['shipments'][0]
+          expect(shipment).to_not be_nil
+          expect(shipment['adjustments'][0]).not_to be_empty
+          expect(shipment['adjustments'][0]['label']).to eq(adjustment.label)
+        end
+      end
+    end
+
+    it "orders contain the basic checkout steps" do
+      allow_any_instance_of(Order).to receive_messages :user => current_api_user
+      api_get :show, :id => order.to_param
+      expect(response.status).to eq(200)
+      expect(json_response["checkout_steps"]).to eq(["address", "delivery", "complete"])
     end
 
     # Regression test for #1992
     it "can view an order not in a standard state" do
-      Order.any_instance.stub :user => current_api_user
+      allow_any_instance_of(Order).to receive_messages :user => current_api_user
       order.update_column(:state, 'shipped')
       api_get :show, :id => order.to_param
     end
 
     it "can not view someone else's order" do
-      Order.any_instance.stub :user => stub_model(Spree::LegacyUser)
+      allow_any_instance_of(Order).to receive_messages :user => stub_model(Spree::LegacyUser)
       api_get :show, :id => order.to_param
       assert_unauthorized!
+    end
+
+    it "can view an order if the token is known" do
+      api_get :show, :id => order.to_param, :order_token => order.guest_token
+      expect(response.status).to eq(200)
+    end
+
+    it "can view an order if the token is passed in header" do
+      request.headers["X-Spree-Order-Token"] = order.guest_token
+      api_get :show, :id => order.to_param
+      expect(response.status).to eq(200)
+    end
+
+    context "with BarAbility registered" do
+      before { Spree::Ability.register_ability(::BarAbility) }
+      after { Spree::Ability.remove_ability(::BarAbility) }
+
+      it "can view an order" do
+        user = mock_model(Spree::LegacyUser)
+        allow(user).to receive_message_chain(:spree_roles, :pluck).and_return(["bar"])
+        allow(user).to receive(:has_spree_role?).with('bar').and_return(true)
+        allow(user).to receive(:has_spree_role?).with('admin').and_return(false)
+        allow(Spree.user_class).to receive_messages find_by: user
+        api_get :show, :id => order.to_param
+        expect(response.status).to eq(200)
+      end
     end
 
     it "cannot cancel an order that doesn't belong to them" do
@@ -53,36 +256,117 @@ module Spree
       assert_unauthorized!
     end
 
-    it "cannot change delivery information on an order that doesn't belong to them" do
-      api_put :delivery, :id => order.to_param
-      assert_unauthorized!
+    it "can create an order" do
+      api_post :create, :order => { :line_items => { "0" => { :variant_id => variant.to_param, :quantity => 5 } } }
+      expect(response.status).to eq(201)
+
+      order = Order.last
+      expect(order.line_items.count).to eq(1)
+      expect(order.line_items.first.variant).to eq(variant)
+      expect(order.line_items.first.quantity).to eq(5)
+
+      expect(json_response['number']).to be_present
+      expect(json_response["token"]).not_to be_blank
+      expect(json_response["state"]).to eq("cart")
+      expect(order.user).to eq(current_api_user)
+      expect(order.email).to eq(current_api_user.email)
+      expect(json_response["user_id"]).to eq(current_api_user.id)
     end
 
-    it "can create an order" do
-      variant = create(:variant)
-      api_post :create, :order => { :line_items => [{ :variant_id => variant.to_param, :quantity => 5 }] }
-      response.status.should == 201
-      order = Order.last
-      order.line_items.count.should == 1
-      order.line_items.first.variant.should == variant
-      order.line_items.first.quantity.should == 5
-      json_response["state"].should == "address"
+    it "assigns email when creating a new order" do
+      api_post :create, :order => { :email => "guest@spreecommerce.com" }
+      expect(json_response['email']).not_to eq controller.current_api_user
+      expect(json_response['email']).to eq "guest@spreecommerce.com"
+    end
+
+    # Regression test for #3404
+    it "can specify additional parameters for a line item" do
+      expect(Order).to receive(:create!).and_return(order = Spree::Order.new)
+      allow(order).to receive(:associate_user!)
+      allow(order).to receive_message_chain(:contents, :add).and_return(line_item = double('LineItem'))
+      expect(line_item).to receive(:update_attributes!).with("special" => true)
+
+      allow(controller).to receive_messages(permitted_line_item_attributes: [:id, :variant_id, :quantity, :special])
+      api_post :create, :order => {
+        :line_items => {
+          "0" => {
+            :variant_id => variant.to_param, :quantity => 5, :special => true
+          }
+        }
+      }
+      expect(response.status).to eq(201)
+    end
+
+    it "cannot arbitrarily set the line items price" do
+      api_post :create, :order => {
+        :line_items => {
+          "0" => {
+            :price => 33.0, :variant_id => variant.to_param, :quantity => 5
+          }
+        }
+      }
+
+      expect(response.status).to eq 201
+      expect(Order.last.line_items.first.price.to_f).to eq(variant.price)
+    end
+
+    context "admin user imports order" do
+      before do
+        allow(current_api_user).to receive_messages has_spree_role?: true
+        allow(current_api_user).to receive_message_chain :spree_roles, pluck: ["admin"]
+      end
+
+      it "is able to set any default unpermitted attribute" do
+        api_post :create, :order => { number: "WOW" }
+        expect(response.status).to eq 201
+        expect(json_response['number']).to eq "WOW"
+      end
+    end
+
+    # Regression test for #3404
+    it "does not update line item needlessly" do
+      expect(Order).to receive(:create!).and_return(order = Spree::Order.new)
+      allow(order).to receive(:associate_user!)
+      allow(order).to receive_message_chain(:contents, :add).and_return(line_item = double('LineItem'))
+      expect(line_item).not_to receive(:update_attributes)
+      api_post :create, :order => {
+        :line_items => {
+          "0" => {
+            :variant_id => variant.to_param, :quantity => 5
+          }
+        }
+      }
     end
 
     it "can create an order without any parameters" do
-      lambda { api_post :create }.should_not raise_error(NoMethodError)
-      response.status.should == 201
+      expect { api_post :create }.not_to raise_error
+      expect(response.status).to eq(201)
       order = Order.last
-      json_response["state"].should == "address"
+      expect(json_response["state"]).to eq("cart")
     end
 
     context "working with an order" do
+
+      let(:variant) { create(:variant) }
+      let!(:line_item) { order.contents.add(variant, 1) }
+      let!(:payment_method) { create(:check_payment_method) }
+
+      let(:address_params) { { :country_id => country.id } }
+      let(:billing_address) { { :firstname => "Tiago", :lastname => "Motta", :address1 => "Av Paulista",
+                                :city => "Sao Paulo", :zipcode => "01310-300", :phone => "12345678",
+                                :country_id => country.id} }
+      let(:shipping_address) { { :firstname => "Tiago", :lastname => "Motta", :address1 => "Av Paulista",
+                                 :city => "Sao Paulo", :zipcode => "01310-300", :phone => "12345678",
+                                 :country_id => country.id} }
+      let(:country) { create(:country, {name: "Brazil", iso_name: "BRAZIL", iso: "BR", iso3: "BRA", numcode: 76 })}
+
       before do
-        Order.any_instance.stub :user => current_api_user
-        create(:payment_method)
+        allow_any_instance_of(Order).to receive_messages user: current_api_user
         order.next # Switch from cart to address
-        order.ship_address.should be_nil
-        order.state.should == "address"
+        order.bill_address = nil
+        order.ship_address = nil
+        order.save
+        expect(order.state).to eq("address")
       end
 
       def clean_address(address)
@@ -91,96 +375,232 @@ module Spree
         address
       end
 
-      let(:address_params) { { :country_id => Country.first.id, :state_id => State.first.id } }
-      let(:shipping_address) { clean_address(attributes_for(:address).merge!(address_params)) }
-      let(:billing_address) { clean_address(attributes_for(:address).merge!(address_params)) }
-      let!(:shipping_method) { create(:shipping_method) }
-      let!(:payment_method) { create(:payment_method) }
+      context "line_items hash not present in request" do
+        it "responds successfully" do
+          api_put :update, :id => order.to_param, :order => {
+            :email => "hublock@spreecommerce.com"
+          }
 
-      it "can add address information to an order" do
-        api_put :address, :id => order.to_param, :shipping_address => shipping_address, :billing_address => billing_address
-
-        response.status.should == 200
-        order.reload
-        order.shipping_address.reload
-        order.billing_address.reload
-        # We can assume the rest of the parameters are set if these two are
-        order.shipping_address.firstname.should == shipping_address[:firstname]
-        order.billing_address.firstname.should == billing_address[:firstname]
-        order.state.should == "delivery"
-        json_response["shipping_methods"].should_not be_empty
+          expect(response).to be_success
+        end
       end
 
-      it "can add just shipping address information to an order" do
-        api_put :address, :id => order.to_param, :shipping_address => shipping_address
-        response.status.should == 200
-        order.reload
-        order.shipping_address.reload
-        order.shipping_address.firstname.should == shipping_address[:firstname]
-        order.bill_address.should be_nil
+      it "updates quantities of existing line items" do
+        api_put :update, :id => order.to_param, :order => {
+          :line_items => {
+            "0" => { :id => line_item.id, :quantity => 10 }
+          }
+        }
+
+        expect(response.status).to eq(200)
+        expect(json_response['line_items'].count).to eq(1)
+        expect(json_response['line_items'].first['quantity']).to eq(10)
       end
 
-      it "cannot use an address that has no valid shipping methods" do
-        shipping_method.destroy
-        api_put :address, :id => order.to_param, :shipping_address => shipping_address, :billing_address => billing_address
-        response.status.should == 422
-        json_response["errors"]["base"].should == ["No shipping methods available for selected location, please change your address and try again."]
+      it "adds an extra line item" do
+        variant2 = create(:variant)
+        api_put :update, :id => order.to_param, :order => {
+          :line_items => {
+            "0" => { :id => line_item.id, :quantity => 10 },
+            "1" => { :variant_id => variant2.id, :quantity => 1}
+          }
+        }
+
+        expect(response.status).to eq(200)
+        expect(json_response['line_items'].count).to eq(2)
+        expect(json_response['line_items'][0]['quantity']).to eq(10)
+        expect(json_response['line_items'][1]['variant_id']).to eq(variant2.id)
+        expect(json_response['line_items'][1]['quantity']).to eq(1)
       end
 
-      it "can not add invalid ship address information to an order" do
-        shipping_address[:firstname] = ""
-        api_put :address, :id => order.to_param, :shipping_address => shipping_address, :billing_address => billing_address
+      it "cannot change the price of an existing line item" do
+        api_put :update, :id => order.to_param, :order => {
+          :line_items => {
+            0 => { :id => line_item.id, :price => 0 }
+          }
+        }
 
-        response.status.should == 422
-        json_response["errors"]["ship_address.firstname"].should_not be_blank
+        expect(response.status).to eq(200)
+        expect(json_response['line_items'].count).to eq(1)
+        expect(json_response['line_items'].first['price'].to_f).to_not eq(0)
+        expect(json_response['line_items'].first['price'].to_f).to eq(line_item.variant.price)
       end
 
-      it "can not add invalid ship address information to an order" do
+      it "can add billing address" do
+        api_put :update, :id => order.to_param, :order => { :bill_address_attributes => billing_address }
+
+        expect(order.reload.bill_address).to_not be_nil
+      end
+
+      it "receives error message if trying to add billing address with errors" do
         billing_address[:firstname] = ""
-        api_put :address, :id => order.to_param, :shipping_address => shipping_address, :billing_address => billing_address
 
-        response.status.should == 422
-        json_response["errors"]["bill_address.firstname"].should_not be_blank
+        api_put :update, :id => order.to_param, :order => { :bill_address_attributes => billing_address }
+
+        expect(json_response['error']).not_to be_nil
+        expect(json_response['errors']).not_to be_nil
+        expect(json_response['errors']['bill_address.firstname'].first).to eq "can't be blank"
       end
 
-      it "can add line items" do
-        api_put :update, :id => order.to_param, :order => { :line_items => [{:variant_id => create(:variant).id, :quantity => 2}] }
+      it "can add shipping address" do
+        expect(order.ship_address).to be_nil
 
-        response.status.should == 200
-        json_response['item_total'].to_f.should_not == order.item_total.to_f
+        api_put :update, :id => order.to_param, :order => { :ship_address_attributes => shipping_address }
+
+        expect(order.reload.ship_address).not_to be_nil
+      end
+
+      it "receives error message if trying to add shipping address with errors" do
+        expect(order.ship_address).to be_nil
+        shipping_address[:firstname] = ""
+
+        api_put :update, :id => order.to_param, :order => { :ship_address_attributes => shipping_address }
+
+        expect(json_response['error']).not_to be_nil
+        expect(json_response['errors']).not_to be_nil
+        expect(json_response['errors']['ship_address.firstname'].first).to eq "can't be blank"
+      end
+
+      it "cannot set the user_id for the order" do
+        user = Spree.user_class.create
+        original_id = order.user_id
+        api_post :update, :id => order.to_param, :order => { user_id: user.id }
+        expect(response.status).to eq 200
+        expect(json_response["user_id"]).to eq(original_id)
+      end
+
+      context "order has shipments" do
+        before { order.create_proposed_shipments }
+
+        it "clears out all existing shipments on line item udpate" do
+          previous_shipments = order.shipments
+          api_put :update, :id => order.to_param, :order => {
+            :line_items => {
+              0 => { :id => line_item.id, :quantity => 10 }
+            }
+          }
+          expect(order.reload.shipments).to be_empty
+        end
       end
 
       context "with a line item" do
-        before do
-          order.line_items << create(:line_item)
-        end
-
-        context "for delivery" do
-          before do
-            order.update_attribute(:state, "delivery")
-          end
-
-          it "can select a shipping method for an order" do
-            order.shipping_method.should be_nil
-            api_put :delivery, :id => order.to_param, :shipping_method_id => shipping_method.id
-            response.status.should == 200
-            order.reload
-            order.state.should == "payment"
-            order.shipping_method.should == shipping_method
-          end
-
-          it "cannot select an invalid shipping method for an order" do
-            order.shipping_method.should be_nil
-            api_put :delivery, :id => order.to_param, :shipping_method_id => '1234567890'
-            response.status.should == 422
-            json_response["errors"].should include("Invalid shipping method specified.")
-          end
+        let(:order_with_line_items) do
+          order = create(:order_with_line_items)
+          create(:adjustment, order: order, adjustable: order)
+          order
         end
 
         it "can empty an order" do
-          api_put :empty, :id => order.to_param
-          response.status.should == 200
-          order.reload.line_items.should be_empty
+          expect(order_with_line_items.adjustments.count).to eq(1)
+          api_put :empty, :id => order_with_line_items.to_param
+          expect(response.status).to eq(204)
+          order_with_line_items.reload
+          expect(order_with_line_items.line_items).to be_empty
+          expect(order_with_line_items.adjustments).to be_empty
+        end
+
+        it "can list its line items with images" do
+          order.line_items.first.variant.images.create!(:attachment => image("thinking-cat.jpg"))
+
+          api_get :show, :id => order.to_param
+
+          expect(json_response['line_items'].first['variant']).to have_attributes([:images])
+        end
+
+        it "lists variants product id" do
+          api_get :show, :id => order.to_param
+
+          expect(json_response['line_items'].first['variant']).to have_attributes([:product_id])
+        end
+
+        it "includes the tax_total in the response" do
+          api_get :show, :id => order.to_param
+
+          expect(json_response['included_tax_total']).to eq('0.0')
+          expect(json_response['additional_tax_total']).to eq('0.0')
+          expect(json_response['display_included_tax_total']).to eq('$0.00')
+          expect(json_response['display_additional_tax_total']).to eq('$0.00')
+        end
+
+        it "lists line item adjustments" do
+          adjustment = create(:adjustment,
+            :label => "10% off!",
+            :order => order,
+            :adjustable => order.line_items.first)
+          adjustment.update_column(:amount, 5)
+          api_get :show, :id => order.to_param
+
+          adjustment = json_response['line_items'].first['adjustments'].first
+          expect(adjustment['label']).to eq("10% off!")
+          expect(adjustment['amount']).to eq("5.0")
+        end
+
+        it "lists payments source without gateway info" do
+          order.payments.push payment = create(:payment)
+          api_get :show, :id => order.to_param
+
+          source = json_response[:payments].first[:source]
+          expect(source[:name]).to eq payment.source.name
+          expect(source[:cc_type]).to eq payment.source.cc_type
+          expect(source[:last_digits]).to eq payment.source.last_digits
+          expect(source[:month].to_i).to eq payment.source.month
+          expect(source[:year].to_i).to eq payment.source.year
+          expect(source.has_key?(:gateway_customer_profile_id)).to be false
+          expect(source.has_key?(:gateway_payment_profile_id)).to be false
+        end
+
+        context "when in delivery" do
+          let!(:shipping_method) do
+            FactoryGirl.create(:shipping_method).tap do |shipping_method|
+              shipping_method.calculator.preferred_amount = 10
+              shipping_method.calculator.save
+            end
+          end
+
+          before do
+            order.bill_address = FactoryGirl.create(:address)
+            order.ship_address = FactoryGirl.create(:address)
+            order.next!
+            order.save
+          end
+
+          it "includes the ship_total in the response" do
+            api_get :show, id: order.to_param
+
+            expect(json_response['ship_total']).to eq '10.0'
+            expect(json_response['display_ship_total']).to eq '$10.00'
+          end
+
+          it "returns available shipments for an order" do
+            api_get :show, :id => order.to_param
+            expect(response.status).to eq(200)
+            expect(json_response["shipments"]).not_to be_empty
+            shipment = json_response["shipments"][0]
+            # Test for correct shipping method attributes
+            # Regression test for #3206
+            expect(shipment["shipping_methods"]).not_to be_nil
+            json_shipping_method = shipment["shipping_methods"][0]
+            expect(json_shipping_method["id"]).to eq(shipping_method.id)
+            expect(json_shipping_method["name"]).to eq(shipping_method.name)
+            expect(json_shipping_method["code"]).to eq(shipping_method.code)
+            expect(json_shipping_method["zones"]).not_to be_empty
+            expect(json_shipping_method["shipping_categories"]).not_to be_empty
+
+            # Test for correct shipping rates attributes
+            # Regression test for #3206
+            expect(shipment["shipping_rates"]).not_to be_nil
+            shipping_rate = shipment["shipping_rates"][0]
+            expect(shipping_rate["name"]).to eq(json_shipping_method["name"])
+            expect(shipping_rate["cost"]).to eq("10.0")
+            expect(shipping_rate["selected"]).to be true
+            expect(shipping_rate["display_cost"]).to eq("$10.00")
+            expect(shipping_rate["shipping_method_code"]).to eq(json_shipping_method["code"])
+
+            expect(shipment["stock_location_name"]).not_to be_blank
+            manifest_item = shipment["manifest"][0]
+            expect(manifest_item["quantity"]).to eq(1)
+            expect(manifest_item["variant_id"]).to eq(order.line_items.first.variant_id)
+          end
         end
       end
     end
@@ -192,8 +612,52 @@ module Spree
         before { Spree::Order.delete_all }
         it "still returns a root :orders key" do
           api_get :index
-          json_response["orders"].should == []
+          expect(json_response["orders"]).to eq([])
         end
+      end
+
+      it "responds with orders updated_at with miliseconds precision" do
+        if ActiveRecord::Base.connection.adapter_name == "Mysql2"
+          skip "MySQL does not support millisecond timestamps."
+        else
+          skip "Probable need to make it call as_json. See https://github.com/rails/rails/commit/0f33d70e89991711ff8b3dde134a61f4a5a0ec06"
+        end
+
+        api_get :index
+        milisecond = order.updated_at.strftime("%L")
+        updated_at = json_response["orders"].first["updated_at"]
+        expect(updated_at.split("T").last).to have_content(milisecond)
+      end
+
+      context "caching enabled" do
+        before do
+          ActionController::Base.perform_caching = true
+          3.times { Order.create }
+        end
+
+        it "returns unique orders" do
+          api_get :index
+
+          orders = json_response[:orders]
+          expect(orders.count).to be >= 3
+          expect(orders.map { |o| o[:id] }).to match_array Order.pluck(:id)
+        end
+
+        after { ActionController::Base.perform_caching = false }
+      end
+
+      it "lists payments source with gateway info" do
+        order.payments.push payment = create(:payment)
+        api_get :show, :id => order.to_param
+
+        source = json_response[:payments].first[:source]
+        expect(source[:name]).to eq payment.source.name
+        expect(source[:cc_type]).to eq payment.source.cc_type
+        expect(source[:last_digits]).to eq payment.source.last_digits
+        expect(source[:month].to_i).to eq payment.source.month
+        expect(source[:year].to_i).to eq payment.source.year
+        expect(source[:gateway_customer_profile_id]).to eq payment.source.gateway_customer_profile_id
+        expect(source[:gateway_payment_profile_id]).to eq payment.source.gateway_payment_profile_id
       end
 
       context "with two orders" do
@@ -201,20 +665,20 @@ module Spree
 
         it "can view all orders" do
           api_get :index
-          json_response["orders"].first.should have_attributes(attributes)
-          json_response["count"].should == 2
-          json_response["current_page"].should == 1
-          json_response["pages"].should == 1
+          expect(json_response["orders"].first).to have_attributes(attributes)
+          expect(json_response["count"]).to eq(2)
+          expect(json_response["current_page"]).to eq(1)
+          expect(json_response["pages"]).to eq(1)
         end
 
         # Test for #1763
         it "can control the page size through a parameter" do
           api_get :index, :per_page => 1
-          json_response["orders"].count.should == 1
-          json_response["orders"].first.should have_attributes(attributes)
-          json_response["count"].should == 1
-          json_response["current_page"].should == 1
-          json_response["pages"].should == 2
+          expect(json_response["orders"].count).to eq(1)
+          expect(json_response["orders"].first).to have_attributes(attributes)
+          expect(json_response["count"]).to eq(1)
+          expect(json_response["current_page"]).to eq(1)
+          expect(json_response["pages"]).to eq(2)
         end
       end
 
@@ -228,17 +692,56 @@ module Spree
 
         it "can query the results through a parameter" do
           api_get :index, :q => { :email_cont => 'spree' }
-          json_response["orders"].count.should == 1
-          json_response["orders"].first.should have_attributes(attributes)
-          json_response["orders"].first["email"].should == expected_result.email
-          json_response["count"].should == 1
-          json_response["current_page"].should == 1
-          json_response["pages"].should == 1
+          expect(json_response["orders"].count).to eq(1)
+          expect(json_response["orders"].first).to have_attributes(attributes)
+          expect(json_response["orders"].first["email"]).to eq(expected_result.email)
+          expect(json_response["count"]).to eq(1)
+          expect(json_response["current_page"]).to eq(1)
+          expect(json_response["pages"]).to eq(1)
+        end
+      end
+
+      context "creation" do
+        it "can create an order without any parameters" do
+          expect { api_post :create }.not_to raise_error
+          expect(response.status).to eq(201)
+          order = Order.last
+          expect(json_response["state"]).to eq("cart")
+        end
+
+        it "can arbitrarily set the line items price" do
+          api_post :create, :order => {
+            :line_items => {
+              "0" => {
+                :price => 33.0, :variant_id => variant.to_param, :quantity => 5
+              }
+            }
+          }
+          expect(response.status).to eq 201
+          expect(Order.last.line_items.first.price.to_f).to eq(33.0)
+        end
+
+        it "can set the user_id for the order" do
+          user = Spree.user_class.create
+          api_post :create, :order => { user_id: user.id }
+          expect(response.status).to eq 201
+          expect(json_response["user_id"]).to eq(user.id)
+        end
+      end
+
+      context "updating" do
+        it "can set the user_id for the order" do
+          user = Spree.user_class.create
+          api_post :update, :id => order.number, :order => { user_id: user.id }
+          expect(response.status).to eq 200
+          expect(json_response["user_id"]).to eq(user.id)
         end
       end
 
       context "can cancel an order" do
         before do
+          Spree::Config[:mails_from] = "spree@example.com"
+
           order.completed_at = Time.now
           order.state = 'complete'
           order.shipment_state = 'ready'
@@ -247,7 +750,7 @@ module Spree
 
         specify do
           api_put :cancel, :id => order.to_param
-          json_response["state"].should == "canceled"
+          expect(json_response["state"]).to eq("canceled")
         end
       end
     end

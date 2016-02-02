@@ -15,7 +15,7 @@ module SpreeCmd
 
       directory 'app', "#{file_name}/app"
       directory 'lib', "#{file_name}/lib"
-      directory 'script', "#{file_name}/script"
+      directory 'bin', "#{file_name}/bin"
 
       template 'extension.gemspec', "#{file_name}/#{file_name}.gemspec"
       template 'Gemfile', "#{file_name}/Gemfile"
@@ -27,7 +27,6 @@ module SpreeCmd
       template 'config/locales/en.yml', "#{file_name}/config/locales/en.yml"
       template 'rspec', "#{file_name}/.rspec"
       template 'spec/spec_helper.rb.tt', "#{file_name}/spec/spec_helper.rb"
-      template 'Versionfile', "#{file_name}/Versionfile"
     end
 
     def final_banner
@@ -39,7 +38,7 @@ module SpreeCmd
         Please update the Versionfile to designate compatibility with different versions of Spree.
         See http://spreecommerce.com/documentation/extensions.html#versionfile
 
-        Consider listing your extension in the official extension registry http://spreecommerce.com/extensions"
+        Consider listing your extension in the official extension registry http://spreecommerce.com/extensions
 
         #{'*' * 80}
       }
@@ -51,7 +50,7 @@ module SpreeCmd
       end
 
       def spree_version
-        '2.0.0.beta'
+        '2.4.11.beta'
       end
 
       def use_prefix(prefix)

@@ -1,4 +1,6 @@
 require "rails/generators/rails/app/app_generator"
+require 'active_support/core_ext/hash'
+require 'spree/core/version'
 
 module Spree
   class DummyGenerator < Rails::Generators::Base
@@ -22,7 +24,9 @@ module Spree
     ]
 
     def generate_test_dummy
-      opts = (options || {}).slice(*PASSTHROUGH_OPTIONS)
+      # calling slice on a Thor::CoreExtensions::HashWithIndifferentAccess
+      # object has been known to return nil
+      opts = {}.merge(options).slice(*PASSTHROUGH_OPTIONS)
       opts[:database] = 'sqlite3' if opts[:database].blank?
       opts[:force] = true
       opts[:skip_bundle] = true
@@ -41,8 +45,20 @@ module Spree
       template "rails/boot.rb", "#{dummy_path}/config/boot.rb", :force => true
       template "rails/application.rb", "#{dummy_path}/config/application.rb", :force => true
       template "rails/routes.rb", "#{dummy_path}/config/routes.rb", :force => true
+      template "rails/test.rb", "#{dummy_path}/config/environments/test.rb", :force => true
       template "rails/script/rails", "#{dummy_path}/spec/dummy/script/rails", :force => true
       template "initializers/custom_user.rb", "#{dummy_path}/config/initializers/custom_user.rb", :force => true
+      template "initializers/devise.rb", "#{dummy_path}/config/initializers/devise.rb", :force => true
+    end
+
+    def test_dummy_inject_extension_requirements
+      if DummyGeneratorHelper.inject_extension_requirements
+        inside dummy_path do
+          inject_require_for('spree_frontend')
+          inject_require_for('spree_backend')
+          inject_require_for('spree_api')
+        end
+      end
     end
 
     def test_dummy_clean
@@ -60,12 +76,24 @@ module Spree
         remove_file "vendor"
         remove_file "spec"
       end
+
     end
 
     attr :lib_name
     attr :database
 
     protected
+
+    def inject_require_for(requirement)
+      inject_into_file 'config/application.rb', %Q[
+begin
+  require '#{requirement}'
+rescue LoadError
+  # #{requirement} is not available.
+end
+      ], :before => /require '#{@lib_name}'/, :verbose => true
+    end
+
     def dummy_path
       ENV['DUMMY_PATH'] || 'spec/dummy'
     end
@@ -95,13 +123,18 @@ module Spree
     end
 
     def gemfile_path
-      version_file = File.expand_path("../../Versionfile", Dir.pwd)
-      if File.exist?(version_file)
-        '../../../../Gemfile'
-      else
+      core_gems = ["spree/core", "spree/api", "spree/backend", "spree/frontend"]
+
+      if core_gems.include?(lib_name)
         '../../../../../Gemfile'
+      else
+        '../../../../Gemfile'
       end
     end
-
   end
+end
+
+module Spree::DummyGeneratorHelper
+  mattr_accessor :inject_extension_requirements
+  self.inject_extension_requirements = false
 end

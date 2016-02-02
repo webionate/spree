@@ -1,10 +1,11 @@
 module Spree
-  class State < ActiveRecord::Base
-    belongs_to :country
+  class State < Spree::Base
+    belongs_to :country, class_name: 'Spree::Country'
+    has_many :addresses, dependent: :nullify
 
-    validates :country, :name, :presence => true
+    has_many :zone_members, as: :zoneable, dependent: :destroy
 
-    attr_accessible :name, :abbr
+    validates :country, :name, presence: true
 
     def self.find_all_by_name_or_abbr(name_or_abbr)
       where('name = ? OR abbr = ?', name_or_abbr, name_or_abbr)

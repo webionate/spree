@@ -1,5 +1,5 @@
 module Spree
-  class Product < ActiveRecord::Base
+  class Product < Spree::Base
     cattr_accessor :search_scopes do
       []
     end
@@ -18,13 +18,25 @@ module Spree
       ]
     end
 
-    simple_scopes.each do |name|
-      # We should not define price scopes here, as they require something slightly different
-      next if name.to_s.include?("master_price")
-      parts = name.to_s.match(/(.*)_by_(.*)/)
-      order_text = "#{Product.quoted_table_name}.#{parts[2]} #{parts[1] == 'ascend' ?  "ASC" : "DESC"}"
-      self.scope(name.to_s, relation.order(order_text))
+    def self.add_simple_scopes(scopes)
+      scopes.each do |name|
+        # We should not define price scopes here, as they require something slightly different
+        next if name.to_s.include?("master_price")
+        parts = name.to_s.match(/(.*)_by_(.*)/)
+        self.scope(name.to_s, -> { order("#{Product.quoted_table_name}.#{parts[2]} #{parts[1] == 'ascend' ?  "ASC" : "DESC"}") })
+      end
     end
+
+    def self.property_conditions(property)
+      properties = Property.table_name
+      conditions = case property
+      when String   then { "#{properties}.name" => property }
+      when Property then { "#{properties}.id" => property.id }
+      else               { "#{properties}.id" => property.to_i }
+      end
+    end
+
+    add_simple_scopes simple_scopes
 
     add_search_scope :ascend_by_master_price do
       joins(:master => :default_price).order("#{price_table_name}.amount ASC")
@@ -49,8 +61,8 @@ module Spree
     # This scope selects products in taxon AND all its descendants
     # If you need products only within one taxon use
     #
-    #   Spree::Product.taxons_id_eq(x)
-    # 
+    #   Spree::Product.joins(:taxons).where(Taxon.table_name => { :id => taxon.id })
+    #
     # If you're using count on the result of this scope, you must use the
     # `:distinct` option as well:
     #
@@ -64,9 +76,9 @@ module Spree
     #
     #   SELECT COUNT(*) ...
     add_search_scope :in_taxon do |taxon|
-      select("DISTINCT(spree_products.id), spree_products.*").
-      joins(:taxons).
-      where(Taxon.table_name => { :id => taxon.self_and_descendants.map(&:id) })
+      includes(:classifications).
+      where("spree_products_taxons.taxon_id" => taxon.self_and_descendants.pluck(:id)).
+      order("spree_products_taxons.position ASC")
     end
 
     # This scope selects products in all taxons AND all its descendants
@@ -75,33 +87,20 @@ module Spree
     #   Spree::Product.taxons_id_eq([x,y])
     add_search_scope :in_taxons do |*taxons|
       taxons = get_taxons(taxons)
-      taxons.first ? prepare_taxon_conditions(taxons) : scoped
+      taxons.first ? prepare_taxon_conditions(taxons) : where(nil)
     end
 
     # a scope that finds all products having property specified by name, object or id
     add_search_scope :with_property do |property|
-      properties = Property.table_name
-      conditions = case property
-      when String   then { "#{properties}.name" => property }
-      when Property then { "#{properties}.id" => property.id }
-      else               { "#{properties}.id" => property.to_i }
-      end
-
-      joins(:properties).where(conditions)
+      joins(:properties).where(property_conditions(property))
     end
 
     # a simple test for product with a certain property-value pairing
     # note that it can test for properties with NULL values, but not for absent values
     add_search_scope :with_property_value do |property, value|
-      properties = Spree::Property.table_name
-      conditions = case property
-      when String   then ["#{properties}.name = ?", property]
-      when Property then ["#{properties}.id = ?", property.id]
-      else               ["#{properties}.id = ?", property.to_i]
-      end
-      conditions = ["#{ProductProperty.table_name}.value = ? AND #{conditions[0]}", value, conditions[1]]
-
-      joins(:properties).where(conditions)
+      joins(:properties)
+        .where("#{ProductProperty.table_name}.value = ?", value)
+        .where(property_conditions(property))
     end
 
     add_search_scope :with_option do |option|
@@ -118,20 +117,20 @@ module Spree
     add_search_scope :with_option_value do |option, value|
       option_values = OptionValue.table_name
       option_type_id = case option
-        when String then OptionType.find_by_name(option) || option.to_i
+        when String then OptionType.find_by(name: option) || option.to_i
         when OptionType then option.id
         else option.to_i
       end
 
       conditions = "#{option_values}.name = ? AND #{option_values}.option_type_id = ?", value, option_type_id
-      group("spree_products.id").joins(:variants_including_master => :option_values).where(conditions)
+      group('spree_products.id').joins(variants_including_master: :option_values).where(conditions)
     end
 
     # Finds all products which have either:
     # 1) have an option value with the name matching the one given
     # 2) have a product property with a value matching the one given
     add_search_scope :with do |value|
-      includes(:variants_including_master => :option_values).
+      includes(variants_including_master: :option_values).
       includes(:product_properties).
       where("#{OptionValue.table_name}.name = ? OR #{ProductProperty.table_name}.value = ?", value, value)
     end
@@ -154,7 +153,7 @@ module Spree
     # Finds all products that have the ids matching the given collection of ids.
     # Alternatively, you could use find(collection_of_ids), but that would raise an exception if one product couldn't be found
     add_search_scope :with_ids do |*ids|
-      where(:id => ids)
+      where(id: ids)
     end
 
     # Sorts products from most popular (popularity is extracted from how many
@@ -184,12 +183,12 @@ module Spree
     end
 
     add_search_scope :not_deleted do
-      where(:deleted_at => nil)
+      where("#{Product.quoted_table_name}.deleted_at IS NULL or #{Product.quoted_table_name}.deleted_at >= ?", Time.zone.now)
     end
 
     # Can't use add_search_scope for this as it needs a default argument
     def self.available(available_on = nil, currency = nil)
-      joins(:master => :prices).where("#{Product.quoted_table_name}.available_on <= ?", available_on || Time.now).where('spree_prices.currency' => currency || Spree::Config[:currency]).where('spree_prices.amount IS NOT NULL')
+      joins(:master => :prices).where("#{Product.quoted_table_name}.available_on <= ?", available_on || Time.now)
     end
     search_scopes << :available
 
@@ -198,23 +197,34 @@ module Spree
     end
     search_scopes << :active
 
-    add_search_scope :on_hand do
-      variants_table = Variant.table_name
-      where("#{table_name}.id in (select product_id from #{variants_table} where product_id = #{table_name}.id and #{variants_table}.deleted_at IS NULL group by product_id having sum(count_on_hand) > 0)")
-    end
-
     add_search_scope :taxons_name_eq do |name|
       group("spree_products.id").joins(:taxons).where(Taxon.arel_table[:name].eq(name))
     end
 
-    if (ActiveRecord::Base.connection.adapter_name == 'PostgreSQL')
-      if table_exists?
-        scope :group_by_products_id, { :group => column_names.map { |col_name| "#{table_name}.#{col_name}"} }
+    def self.distinct_by_product_ids(sort_order = nil)
+      sort_column = sort_order.split(" ").first
+
+      # Postgres will complain when using ordering by expressions not present in
+      # SELECT DISTINCT. e.g.
+      #
+      #   PG::InvalidColumnReference: ERROR:  for SELECT DISTINCT, ORDER BY
+      #   expressions must appear in select list. e.g.
+      #
+      #   SELECT  DISTINCT "spree_products".* FROM "spree_products" LEFT OUTER JOIN
+      #   "spree_variants" ON "spree_variants"."product_id" = "spree_products"."id" AND "spree_variants"."is_master" = 't'
+      #   AND "spree_variants"."deleted_at" IS NULL LEFT OUTER JOIN "spree_prices" ON
+      #   "spree_prices"."variant_id" = "spree_variants"."id" AND "spree_prices"."currency" = 'USD'
+      #   AND "spree_prices"."deleted_at" IS NULL WHERE "spree_products"."deleted_at" IS NULL AND ('t'='t')
+      #   ORDER BY "spree_prices"."amount" ASC LIMIT 10 OFFSET 0
+      #
+      # Don't allow sort_column, a variable coming from params,
+      # to be anything but a column in the database
+      if ActiveRecord::Base.connection.adapter_name == 'PostgreSQL' && !column_names.include?(sort_column)
+        all
+      else
+        distinct
       end
-    else
-      scope :group_by_products_id, { :group => "#{self.quoted_table_name}.id" }
     end
-    search_scopes << :group_by_products_id
 
     private
 
@@ -224,7 +234,7 @@ module Spree
 
       # specifically avoid having an order for taxon search (conflicts with main order)
       def self.prepare_taxon_conditions(taxons)
-        ids = taxons.map { |taxon| taxon.self_and_descendants.map(&:id) }.flatten.uniq
+        ids = taxons.map { |taxon| taxon.self_and_descendants.pluck(:id) }.flatten.uniq
         joins(:taxons).where("#{Taxon.table_name}.id" => ids)
       end
 
@@ -240,10 +250,10 @@ module Spree
         taxons = Taxon.table_name
         ids_or_records_or_names.flatten.map { |t|
           case t
-          when Integer then Taxon.find_by_id(t)
+          when Integer then Taxon.find_by(id: t)
           when ActiveRecord::Base then t
           when String
-            Taxon.find_by_name(t) ||
+            Taxon.find_by(name: t) ||
             Taxon.where("#{taxons}.permalink LIKE ? OR #{taxons}.permalink = ?", "%/#{t}/", "#{t}/").first
           end
         }.compact.flatten.uniq

@@ -2,17 +2,19 @@ require_dependency 'spree/calculator'
 
 module Spree
   class Calculator::FlatRate < Calculator
-    preference :amount, :decimal, :default => 0
-    preference :currency, :string, :default => Spree::Config[:currency]
-
-    attr_accessible :preferred_amount, :preferred_currency
+    preference :amount, :decimal, default: 0
+    preference :currency, :string, default: ->{ Spree::Config[:currency] }
 
     def self.description
-      I18n.t(:flat_rate_per_order)
+      Spree.t(:flat_rate_per_order)
     end
 
     def compute(object=nil)
-      self.preferred_amount
+      if object && preferred_currency.upcase == object.currency.upcase
+        preferred_amount
+      else
+        0
+      end
     end
   end
 end

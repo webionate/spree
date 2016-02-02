@@ -1,84 +1,153 @@
-**THIS README IS FOR THE MASTER BRANCH OF SPREE AND REFLECTS THE WORK CURRENTLY EXISTING ON THE MASTER BRANCH. IF YOU ARE WISHING TO USE A NON-MASTER BRANCH OF
+**THIS README IS FOR THE MASTER BRANCH OF SPREE AND REFLECTS THE WORK CURRENTLY
+EXISTING ON THE MASTER BRANCH. IF YOU ARE WISHING TO USE A NON-MASTER BRANCH OF
 SPREE, PLEASE CONSULT THAT BRANCH'S README AND NOT THIS ONE.**
 
 SUMMARY
 -------
 
+Spree is a complete open source e-commerce solution built with Ruby on Rails. It
+was originally developed by Sean Schofield and is now maintained by a dedicated
+[core team](https://github.com/spree/spree/wiki/Core-Team). You can find out more by
+visiting the [Spree e-commerce project page](http://spreecommerce.com).
 
-Spree is a complete open source e-commerce solution built with Ruby on Rails.  It was originally developed by Sean Schofield
-and is now maintained by a dedicated [core team](http://spreecommerce.com/core-team).  You can find out more
-by visiting the [Spree e-commerce project page](http://spreecommerce.com).
+Spree actually consists of several different gems, each of which are maintained
+in a single repository and documented in a single set of
+[online documentation](http://spreecommerce.com/documentation). By requiring the
+Spree gem you automatically require all of the necessary gem dependencies which are:
 
-Spree actually consists of several different gems, each of which are maintained in a single repository and documented
-in a single set of [online documentation](http://spreecommerce.com/documentation).  By requiring the Spree gem you
-automatically require all of the necessary gem dependencies which are:
+* spree_api (RESTful API)
+* spree_frontend (User-facing components)
+* spree_backend (Admin area)
+* spree_cmd (Command-line tools)
+* spree_core (Models & Mailers, the basic components of Spree that it can't run without)
+* spree_sample (Sample data)
 
-* spree_api
-* spree_cmd
-* spree_core
-* spree_dash
-* spree_promo
-* spree_sample
+All of the gems are designed to work together to provide a fully functional
+e-commerce platform. It is also possible, however, to use only the pieces you are
+interested in. For example, you could use just the barebones spree\_core gem
+and perhaps combine it with your own custom backend admin instead of using
+spree_api.
 
-All of the gems are designed to work together to provide a fully functional e-commerce platform.  It is also possible,
-however, to use only the pieces you are interested in.  So for example, you could use just the barebones spree\_core gem
-and perhaps combine it with your own custom promotion scheme instead of using spree_promo.
+[![Code Climate](https://codeclimate.com/github/spree/spree.png)](https://codeclimate.com/github/spree/spree)
+[![Issue Stats](http://issuestats.com/github/spree/spree/badge/pr)](http://issuestats.com/github/spree/spree)
+[![Issue Stats](http://issuestats.com/github/spree/spree/badge/issue)](http://issuestats.com/github/spree/spree)
 
-[![Build Status](https://secure.travis-ci.org/spree/spree.png)](http://travis-ci.org/spree/spree)
-[![Code Climate](https://codeclimate.com/badge.png)](https://codeclimate.com/github/spree/spree)
 Installation
 ------------
+
+**THIS README IS FOR THE MASTER BRANCH OF SPREE AND REFLECTS THE WORK CURRENTLY
+EXISTING ON THE MASTER BRANCH. IF YOU ARE WISHING TO USE A NON-MASTER BRANCH OF
+SPREE, PLEASE CONSULT THAT BRANCH'S README AND NOT THIS ONE.**
 
 The fastest way to get started is by using the spree command line tool
 available in the spree gem which will add Spree to an existing Rails application.
 
-    $ gem install rails -v 3.2.9
-    $ gem install spree
-    $ rails _3.2.9_ new my_store
-    $ spree install my_store
+```shell
+gem install rails -v 4.1.11
+gem install spree
+rails _4.1.11_ new my_store
+spree install my_store
+```
 
-This will add the Spree gem to your Gemfile, create initializers, copy migrations and
-optionally generate sample products and orders.
+This will add the Spree gem to your Gemfile, create initializers, copy migrations
+and optionally generate sample products and orders.
 
-If you get an "Unable to resolve dependencies" error when installing the Spree gem then you can try installing just the spree_cmd gem which should avoid any circular dependency issues.
+If you get an "Unable to resolve dependencies" error when installing the Spree gem
+then you can try installing just the spree_cmd gem which should avoid any circular
+dependency issues.
 
-    $ gem install spree_cmd
+```shell
+gem install spree_cmd
+```
 
 To auto accept all prompts while running the install generator, pass -A as an option
 
-    $ spree install my_store -A
+```shell
+spree install my_store -A
+```
 
-Using the Gem
+To select a specific branch, pass in the `--branch` option. If there is no branch, you
+will be given the latest version of either spree_auth_devise or spree_gateway.
+
+```shell
+spree install my_store --branch "2-4-stable"
+```
+
+Using stable builds and bleeding edge
 -------------
 
-You can manually add Spree to your Rails 3.2.x application. Add Spree to
+To use a stable build of Spree, you can manually add Spree to your
+Rails application. To use the 2-4-stable branch of Spree, add this line to
 your Gemfile.
 
 ```ruby
-gem 'spree', :git => 'git://github.com/spree/spree.git'
+gem 'spree', github: 'spree/spree', branch: '2-4-stable'
 ```
 
-Update your bundle
+Alternatively, if you want to use the bleeding edge version of Spree, use this
+line:
 
-    $ bundle install
+```ruby
+gem 'spree', github: 'spree/spree'
+```
 
-Use the install generator to copy migrations, initializers and generate
-sample data.
+**Note: The master branch is not guaranteed to ever be in a fully functioning
+state. It is unwise to use this branch in a production system you care deeply
+about.**
 
-    $ rails g spree:install
+If you wish to have authentication included also, you will need to add the
+`spree_auth_devise` gem as well. Either this:
 
-You can avoid running migrations or generating seed and sample data
+```ruby
+gem 'spree_auth_devise', github: 'spree/spree_auth_devise', branch: '2-4-stable'
+```
 
-    $ rails g spree:install --migrate=false --sample=false --seed=false
+Or this:
 
-You can always perform the steps later.
+```ruby
+gem 'spree_auth_devise', github: 'spree/spree_auth_devise'
+```
 
-    $ bundle exec rake db:migrate
-    $ bundle exec rake db:seed
+Once you've done that, then you can install these gems using this command:
 
-To manually load sample products, orders, etc., run the following rake task
+```shell
+bundle install
+```
 
-    $ bundle exec rake spree_sample:load
+Use the install generator to set up Spree:
+
+```shell
+rails g spree:install --sample=false --seed=false
+```
+
+At this point, if you are using spree_auth_devise you will need to change this
+line in `config/initializers/spree.rb`:
+
+```ruby
+Spree.user_class = "Spree::LegacyUser"
+```
+
+To this:
+
+```ruby
+Spree.user_class = "Spree::User"
+```
+
+You can avoid running migrations or generating seed and sample data by passing
+in these flags:
+
+```shell
+rails g spree:install --migrate=false --sample=false --seed=false
+```
+
+You can always perform the steps later by using these commands.
+
+```shell
+bundle exec rake railties:install:migrations
+bundle exec rake db:migrate
+bundle exec rake db:seed
+bundle exec rake spree_sample:load
+```
 
 Browse Store
 ------------
@@ -90,107 +159,182 @@ Browse Admin Interface
 
 http://localhost:nnnn/admin
 
-
-
 Working with the edge source (latest and greatest features)
 -----------------------------------------------------------
 
-The source code is essentially a collection of gems.  Spree is meant to be run within the context of Rails application.  You can easily create a sandbox application inside of your cloned source directory for testing purposes.
+The source code is essentially a collection of gems. Spree is meant to be run
+within the context of Rails application. You can easily create a sandbox
+application inside of your cloned source directory for testing purposes.
 
 
 1. Clone the Git repo
 
-        $ git clone git://github.com/spree/spree.git
-        $ cd spree
+```shell
+git clone git://github.com/spree/spree.git
+cd spree
+```
 
 2. Install the gem dependencies
 
-        $ bundle install
+```shell
+bundle install
+```
 
-3. Create a sandbox Rails application for testing purposes (and automatically perform all necessary database setup)
+3. Create a sandbox Rails application for testing purposes (and automatically
+perform all necessary database setup)
 
-        $ bundle exec rake sandbox
+```shell
+bundle exec rake sandbox
+```
 
 4. Start the server
 
-        $ cd sandbox
-        $ rails server
+```shell
+cd sandbox
+rails server
+```
 
 Performance
 -----------
 
-You may noticed that your Spree store runs slowly in development mode.  This is a side-effect of how Rails works in development mode which is to continuous reload your Ruby objects on each request.  The introduction of the asset pipeline in Rails 3.1 made default performance in development mode significantly worse.  There are, however, a few tricks to speeding up performance in development mode.
+You may notice that your Spree store runs slowly in development mode.  This is
+a side-effect of how Rails works in development mode which is to continuously reload
+your Ruby objects on each request.  The introduction of the asset pipeline in
+Rails 3.1 made default performance in development mode significantly worse. There
+are, however, a few tricks to speeding up performance in development mode.
 
-You can recompile your assets as follows:
+First, in your `config/development.rb`:
 
-    $ bundle exec rake assets:precompile:nondigest
+```ruby
+config.assets.debug = false
+```
 
-If you want to remove precompiled assets (recommended before you commit to Git and push your changes) use the following rake task:
+You can precompile your assets as follows:
 
-    $ bundle exec rake assets:clean
+```shell
+RAILS_ENV=development bundle exec rake assets:precompile
+```
+
+If you want to remove precompiled assets (recommended before you commit to Git
+and push your changes) use the following rake task:
+
+```shell
+RAILS_ENV=development bundle exec rake assets:clean
+```
 
 Use Dedicated Spree Devise Authentication
 -----------------------------------------
 Add the following to your Gemfile
 
-    $ gem 'spree_auth_devise', :git => 'git://github.com/spree/spree_auth_devise'
+```ruby
+gem 'spree_auth_devise', github: 'spree/spree_auth_devise'
+```
 
-Then run `bundle install`. Authentication will then work exactly as it did in previous versions of Spree.
+Then run `bundle install`. Authentication will then work exactly as it did in
+previous versions of Spree.
 
 This line is automatically added by the `spree install` command.
 
-If you're installing this in a new Spree 1.2+ application, you'll need to install and run the migrations with
+If you're installing this in a new Spree 1.2+ application, you'll need to install
+and run the migrations with
 
-    $ bundle exec rake spree_auth:install:migrations
-    $ bundle exec rake db:migrate
+```shell
+bundle exec rake spree_auth:install:migrations
+bundle exec rake db:migrate
+```
 
 change the following line in `config/initializers/spree.rb`
 ```ruby
-Spree.user_class = "Spree::LegacyUser"
+Spree.user_class = 'Spree::LegacyUser'
 ```
 to
 ```ruby
-Spree.user_class = "Spree::User"
+Spree.user_class = 'Spree::User'
 ```
 
 In order to set up the admin user for the application you should then run:
 
-    $ bundle exec rake spree_auth:admin:create
-
+```shell
+bundle exec rake spree_auth:admin:create
+```
 
 Running Tests
 -------------
 
-Each gem contains its own series of tests, and for each directory, you need to do a quick one-time
-creation of a test application and then you can use it to run the tests.  For example, to run the
-tests for the core project.
+[![Team City](http://www.jetbrains.com/img/logos/logo_teamcity_small.gif)](http://www.jetbrains.com/teamcity)
 
-    $ cd core
-    $ bundle exec rake test_app
+We use [TeamCity](http://www.jetbrains.com/teamcity/) to run the tests for Spree.
 
-If you're working on multiple facets of Spree, you may want
-to run this command at the root of the Spree project to
-generate test applications for all the facets:
+You can see the build statuses at [http://ci.spree.fm](http://ci.spree.fm/guestLogin.html?guest=1).
 
-    $ bundle exec rake test_app
+---
 
-You can run all of the tests inside a facet by also running
-this command:
+Each gem contains its own series of tests, and for each directory, you need to
+do a quick one-time creation of a test application and then you can use it to run
+the tests.  For example, to run the tests for the core project.
+```shell
+cd core
+bundle exec rake test_app
+bundle exec rspec spec
+```
 
-    $ cd core
-    $ bundle exec rake
+If you would like to run specs against a particular database you may specify the
+dummy apps database, which defaults to sqlite3.
+```shell
+DB=postgres bundle exec rake test_app
+```
 
 If you want to run specs for only a single spec file
-
-    $ bundle exec rspec spec/models/state_spec.rb
+```shell
+bundle exec rspec spec/models/spree/state_spec.rb
+```
 
 If you want to run a particular line of spec
+```shell
+bundle exec rspec spec/models/spree/state_spec.rb:7
+```
 
-    $ bundle exec rspec spec/models/state_spec.rb:7
+You can also enable fail fast in order to stop tests at the first failure
+```shell
+FAIL_FAST=true bundle exec rspec spec/models/state_spec.rb
+```
 
-Travis, the continuous integration service, runs the test suite for each gem one at a time, using the same commands as contained within [`build.sh`](https://github.com/spree/spree/tree/master/build.sh).
+If you want to run the simplecov code coverage report
+```shell
+COVERAGE=true bundle exec rspec spec
+```
+
+If you're working on multiple facets of Spree to test,
+please ensure that you have a postgres user:
+
+```shell
+createuser -s -r postgres
+```
+
+And also ensure that you have [PhantomJS](http://phantomjs.org/) installed as well:
+
+```shell
+brew update && brew install phantomjs
+```
+
+To execute all the tests, you may want to run this command at the
+root of the Spree project to generate test applications and run
+specs for all the facets:
+```shell
+bash build.sh
+```
+
+Further Documentation
+------------
+Spree has a number of really useful guides online at [http://guides.spreecommerce.com](http://guides.spreecommerce.com).
+
+Roadmap
+------------
+Spree roadmap at [https://trello.com/b/PQsUfCL0/spree-roadmap](https://trello.com/b/PQsUfCL0/spree-roadmap).
 
 Contributing
 ------------
 
-Spree is an open source project and we encourage contributions.  Please see the [contributors guidelines](http://spreecommerce.com/documentation/contributing_to_spree.html) before contributing.
+Spree is an open source project and we encourage contributions. Please see the
+[contributors guidelines](http://guides.spreecommerce.com/developer/contributing.html)
+before contributing.

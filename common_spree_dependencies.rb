@@ -1,36 +1,45 @@
 # By placing all of Spree's shared dependencies in this file and then loading
 # it for each component's Gemfile, we can be sure that we're only testing just
 # the one component of Spree.
-source 'http://rubygems.org'
+source 'https://rubygems.org'
 
-gem 'json'
-gem 'sqlite3'
-gem 'mysql2'
-gem 'pg'
-gem 'multi_json', "1.2.0"
-# Gems used only for assets and not required
-# in production environments by default.
-group :assets do
-  gem 'sass-rails', "~> 3.2"
-  gem 'coffee-rails', "~> 3.2"
+platforms :ruby do
+  gem 'mysql2'
+  gem 'pg'
+  gem 'sqlite3'
 end
+
+platforms :jruby do
+  gem 'jruby-openssl'
+  gem 'activerecord-jdbcsqlite3-adapter'
+end
+
+gem 'coffee-rails', '~> 4.0.0'
+gem 'sass-rails', '~> 4.0.2'
 
 group :test do
-  gem 'guard'
-  gem 'guard-rspec', '~> 0.5.0'
-  gem 'rspec-rails', '~> 2.9.0'
-  gem 'factory_girl_rails', '~> 1.7.0'
-  gem 'email_spec', '~> 1.2.1'
-
-  gem 'ffaker'
-  gem 'shoulda-matchers', '~> 1.0.0'
-  gem 'capybara', '1.1.3'
-  gem 'selenium-webdriver', '2.25.0'
-  gem 'database_cleaner', '0.7.1'
+  gem 'capybara', '~> 2.4'
+  gem 'database_cleaner', '~> 1.3'
+  gem 'email_spec'
+  gem 'factory_girl_rails', '~> 4.5.0'
   gem 'launchy'
-  # gem 'debugger'
+  gem 'rspec-activemodel-mocks'
+  gem 'rspec-collection_matchers'
+  gem 'rspec-its'
+  gem 'rspec-rails', '~> 3.1.0'
+  gem 'simplecov'
+  gem 'webmock', '1.8.11'
+  gem 'poltergeist', '1.5.0'
+  gem 'timecop'
+  gem 'with_model'
 end
 
-gemspec
-
-
+group :test, :development do
+  platforms :ruby_19 do
+    gem 'pry-debugger'
+  end
+  platforms :ruby_20, :ruby_21 do
+    gem 'pry-byebug'
+  end
+  gem 'rspec-retry'
+end

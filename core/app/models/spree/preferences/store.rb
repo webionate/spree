@@ -14,13 +14,13 @@ module Spree::Preferences
     def initialize
       @cache = Rails.cache
       @persistence = true
-      load_preferences
     end
 
-    def set(key, value, type)
+    def set(key, value)
       @cache.write(key, value)
-      persist(key, value, type)
+      persist(key, value)
     end
+    alias_method :[]=, :set
 
     def exist?(key)
       @cache.exist?(key) ||
@@ -29,38 +29,52 @@ module Spree::Preferences
 
     def get(key)
       # return the retrieved value, if it's in the cache
-      if (val = @cache.read(key)).present?
+      # use unless nil? incase the value is actually boolean false
+      #
+      unless (val = @cache.read(key)).nil?
         return val
       end
 
-      return nil unless should_persist?
+      if should_persist?
+        # If it's not in the cache, maybe it's in the database, but
+        # has been cleared from the cache
 
-      # If it's not in the cache, maybe it's in the database, but
-      # has been cleared from the cache
+        # does it exist in the database?
+        if preference = Spree::Preference.find_by_key(key)
+          # it does exist
+          val = preference.value
+        else
+          # use the fallback value
+          val = yield
+        end
 
-      # does it exist in the database?
-      if preference = Spree::Preference.find_by_key(key)
-        # it does exist, so let's put it back into the cache
-        @cache.write(preference.key, preference.value)
+        # Cache either the value from the db or the fallback value.
+        # This avoids hitting the db with subsequent queries.
+        @cache.write(key, val)
 
-        # and return the value
-        preference.value
+        return val
+      else
+        yield
       end
     end
+    alias_method :fetch, :get
 
     def delete(key)
       @cache.delete(key)
       destroy(key)
     end
 
+    def clear_cache
+      @cache.clear
+    end
+
     private
 
-    def persist(cache_key, value, type)
+    def persist(cache_key, value)
       return unless should_persist?
 
       preference = Spree::Preference.where(:key => cache_key).first_or_initialize
       preference.value = value
-      preference.value_type = type
       preference.save
     end
 
@@ -69,15 +83,6 @@ module Spree::Preferences
 
       preference = Spree::Preference.find_by_key(cache_key)
       preference.destroy if preference
-    end
-
-    def load_preferences
-      return unless should_persist?
-
-      Spree::Preference.valid.each do |p|
-        Spree::Preference.convert_old_value_types(p) # see comment
-        @cache.write(p.key, p.value)
-      end
     end
 
     def should_persist?

@@ -1,126 +1,59 @@
+if ENV["COVERAGE"]
+  # Run Coverage report
+  require 'simplecov'
+  SimpleCov.start do
+    add_group 'Controllers', 'app/controllers'
+    add_group 'Helpers', 'app/helpers'
+    add_group 'Mailers', 'app/mailers'
+    add_group 'Models', 'app/models'
+    add_group 'Views', 'app/views'
+    add_group 'Jobs', 'app/jobs'
+    add_group 'Libraries', 'lib'
+  end
+end
+
 # This file is copied to ~/spec when you run 'ruby script/generate rspec'
 # from the project root directory.
 ENV["RAILS_ENV"] ||= 'test'
-require File.expand_path("../dummy/config/environment", __FILE__)
+
+begin
+  require File.expand_path("../dummy/config/environment", __FILE__)
+rescue LoadError
+  puts "Could not load dummy application. Please ensure you have run `bundle exec rake test_app`"
+end
+
 require 'rspec/rails'
-
-# Requires supporting files with custom matchers and macros, etc,
-# in ./support/ and its subdirectories.
-Dir["#{File.dirname(__FILE__)}/support/**/*.rb"].each {|f| require f}
-
 require 'database_cleaner'
+require 'ffaker'
 
-require 'spree/core/testing_support/factories'
-require 'spree/core/testing_support/controller_requests'
-require 'spree/core/testing_support/authorization_helpers'
-require 'spree/core/testing_support/preferences'
-require 'spree/core/testing_support/flash'
+Dir["./spec/support/**/*.rb"].sort.each { |f| require f }
 
-require 'spree/core/url_helpers'
-require 'paperclip/matchers'
+if ENV["CHECK_TRANSLATIONS"]
+  require "spree/testing_support/i18n"
+end
+
+require 'spree/testing_support/factories'
+require 'spree/testing_support/preferences'
 
 RSpec.configure do |config|
+  config.color = true
+  config.infer_spec_type_from_file_location!
   config.mock_with :rspec
 
-  config.fixture_path = "#{::Rails.root}/spec/fixtures"
+  config.fixture_path = File.join(File.expand_path(File.dirname(__FILE__)), "fixtures")
 
-  #config.include Devise::TestHelpers, :type => :controller
   # If you're not using ActiveRecord, or you'd prefer not to run each of your
   # examples within a transaction, comment the following line or assign false
   # instead of true.
-  config.use_transactional_fixtures = false
+  config.use_transactional_fixtures = true
 
-  config.before(:each) do
-    if example.metadata[:js]
-      DatabaseCleaner.strategy = :truncation
-    else
-      DatabaseCleaner.strategy = :transaction
-    end
-  end
-
-  config.before(:each) do
-    DatabaseCleaner.start
+  config.before :each do
+    Rails.cache.clear
     reset_spree_preferences
   end
 
-  config.after(:each) do
-    DatabaseCleaner.clean
-  end
-
   config.include FactoryGirl::Syntax::Methods
-  config.include Spree::Core::UrlHelpers
-  config.include Spree::Core::TestingSupport::ControllerRequests
-  config.include Spree::Core::TestingSupport::Preferences
-  config.include Spree::Core::TestingSupport::Flash
+  config.include Spree::TestingSupport::Preferences
 
-  config.include Paperclip::Shoulda::Matchers
+  config.fail_fast = ENV['FAIL_FAST'] || false
 end
-
-shared_context "custom products" do
-  before(:each) do
-    reset_spree_preferences do |config|
-      config.allow_backorders = true
-    end
-
-    taxonomy = FactoryGirl.create(:taxonomy, :name => 'Categories')
-    root = taxonomy.root
-    clothing_taxon = FactoryGirl.create(:taxon, :name => 'Clothing', :parent_id => root.id)
-    bags_taxon = FactoryGirl.create(:taxon, :name => 'Bags', :parent_id => root.id)
-    mugs_taxon = FactoryGirl.create(:taxon, :name => 'Mugs', :parent_id => root.id)
-
-    taxonomy = FactoryGirl.create(:taxonomy, :name => 'Brands')
-    root = taxonomy.root
-    apache_taxon = FactoryGirl.create(:taxon, :name => 'Apache', :parent_id => root.id)
-    rails_taxon = FactoryGirl.create(:taxon, :name => 'Ruby on Rails', :parent_id => root.id)
-    ruby_taxon = FactoryGirl.create(:taxon, :name => 'Ruby', :parent_id => root.id)
-
-    FactoryGirl.create(:custom_product, :name => 'Ruby on Rails Ringer T-Shirt', :price => '19.99', :taxons => [rails_taxon, clothing_taxon])
-    FactoryGirl.create(:custom_product, :name => 'Ruby on Rails Mug', :price => '15.99', :taxons => [rails_taxon, mugs_taxon])
-    FactoryGirl.create(:custom_product, :name => 'Ruby on Rails Tote', :price => '15.99', :taxons => [rails_taxon, bags_taxon])
-    FactoryGirl.create(:custom_product, :name => 'Ruby on Rails Bag', :price => '22.99', :taxons => [rails_taxon, bags_taxon])
-    FactoryGirl.create(:custom_product, :name => 'Ruby on Rails Baseball Jersey', :price => '19.99', :taxons => [rails_taxon, clothing_taxon])
-    FactoryGirl.create(:custom_product, :name => 'Ruby on Rails Stein', :price => '16.99', :taxons => [rails_taxon, mugs_taxon])
-    FactoryGirl.create(:custom_product, :name => 'Ruby on Rails Jr. Spaghetti', :price => '19.99', :taxons => [rails_taxon, clothing_taxon])
-    FactoryGirl.create(:custom_product, :name => 'Ruby Baseball Jersey', :price => '19.99', :taxons => [ruby_taxon, clothing_taxon])
-    FactoryGirl.create(:custom_product, :name => 'Apache Baseball Jersey', :price => '19.99', :taxons => [apache_taxon, clothing_taxon])
-  end
-end
-
-
-
-shared_context "product prototype" do
-
-  def build_option_type_with_values(name, values)
-    ot = FactoryGirl.create(:option_type, :name => name)
-    values.each do |val|
-      ot.option_values.create({:name => val.downcase, :presentation => val}, :without_protection => true)
-    end
-    ot
-  end
-
-  let(:product_attributes) do
-    # FactoryGirl.attributes_for is un-deprecated!
-    #   https://github.com/thoughtbot/factory_girl/issues/274#issuecomment-3592054
-    FactoryGirl.attributes_for(:simple_product)
-  end
-
-  let(:prototype) do
-    size = build_option_type_with_values("size", %w(Small Medium Large))
-    FactoryGirl.create(:prototype, :name => "Size", :option_types => [ size ])
-  end
-
-  let(:option_values_hash) do
-    hash = {}
-    prototype.option_types.each do |i|
-      hash[i.id.to_s] = i.option_value_ids
-    end
-    hash
-  end
-
-end
-
-
-
-PAYMENT_STATES = Spree::Payment.state_machine.states.keys unless defined? PAYMENT_STATES
-SHIPMENT_STATES = Spree::Shipment.state_machine.states.keys unless defined? SHIPMENT_STATES
-ORDER_STATES = Spree::Order.state_machine.states.keys unless defined? ORDER_STATES

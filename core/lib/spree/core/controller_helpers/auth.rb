@@ -2,15 +2,14 @@ module Spree
   module Core
     module ControllerHelpers
       module Auth
-        def self.included(base)
-          base.class_eval do
-            include SslRequirement
+        extend ActiveSupport::Concern
 
-            helper_method :try_spree_current_user
+        included do
+          before_filter :set_guest_token
+          helper_method :try_spree_current_user
 
-            rescue_from CanCan::AccessDenied do |exception|
-              return unauthorized
-            end
+          rescue_from CanCan::AccessDenied do |exception|
+            redirect_unauthorized_access
           end
         end
 
@@ -19,17 +18,14 @@ module Spree
           @current_ability ||= Spree::Ability.new(try_spree_current_user)
         end
 
-        # Redirect as appropriate when an access request fails.  The default action is to redirect to the login screen.
-        # Override this method in your controllers if you want to have special behavior in case the user is not authorized
-        # to access the requested action.  For example, a popup window might simply close itself.
-        def unauthorized
-          if try_spree_current_user
-            flash[:error] = t(:authorization_failure)
-            redirect_to '/unauthorized'
-          else
-            store_location
-            url = respond_to?(:spree_login_path) ? spree_login_path : root_path
-            redirect_to url
+        def redirect_back_or_default(default)
+          redirect_to(session["spree_user_return_to"] || default)
+          session["spree_user_return_to"] = nil
+        end
+
+        def set_guest_token
+          unless cookies.signed[:guest_token].present?
+            cookies.permanent.signed[:guest_token] = SecureRandom.urlsafe_base64(nil, false)
           end
         end
 
@@ -45,20 +41,42 @@ module Spree
 
           disallowed_urls.map!{ |url| url[/\/\w+$/] }
           unless disallowed_urls.include?(request.fullpath)
-            session['user_return_to'] = request.fullpath.gsub('//', '/')
+            session['spree_user_return_to'] = request.fullpath.gsub('//', '/')
           end
         end
 
         # proxy method to *possible* spree_current_user method
         # Authentication extensions (such as spree_auth_devise) are meant to provide spree_current_user
         def try_spree_current_user
-          respond_to?(:spree_current_user) ? spree_current_user : nil
+          # This one will be defined by apps looking to hook into Spree
+          # As per authentication_helpers.rb
+          if respond_to?(:spree_current_user)
+            spree_current_user
+          # This one will be defined by Devise
+          elsif respond_to?(:current_spree_user)
+            current_spree_user
+          else
+            nil
+          end
         end
 
-        def redirect_back_or_default(default)
-          redirect_to(session["user_return_to"] || default)
-          session["user_return_to"] = nil
+        # Redirect as appropriate when an access request fails.  The default action is to redirect to the login screen.
+        # Override this method in your controllers if you want to have special behavior in case the user is not authorized
+        # to access the requested action.  For example, a popup window might simply close itself.
+        def redirect_unauthorized_access
+          if try_spree_current_user
+            flash[:error] = Spree.t(:authorization_failure)
+            redirect_to '/unauthorized'
+          else
+            store_location
+            if respond_to?(:spree_login_path)
+              redirect_to spree_login_path
+            else
+              redirect_to spree.respond_to?(:root_path) ? spree.root_path : root_path
+            end
+          end
         end
+
       end
     end
   end

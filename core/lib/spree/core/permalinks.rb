@@ -14,11 +14,7 @@ module Spree
           options[:field] ||= :permalink
           self.permalink_options = options
 
-          validates permalink_options[:field], :uniqueness => true
-
-          if self.table_exists? && self.column_names.include?(permalink_options[:field].to_s)
-            before_validation(:on => :create) { save_permalink }
-          end
+          before_validation(:on => :create) { save_permalink }
         end
 
         def find_by_param(value, *args)
@@ -33,23 +29,39 @@ module Spree
           permalink_options[:field]
         end
 
+        def permalink_prefix
+          permalink_options[:prefix] || ""
+        end
+
+        def permalink_length
+          permalink_options[:length] || 9
+        end
+
         def permalink_order
           order = permalink_options[:order]
           "#{order} ASC," if order
         end
       end
 
+      def generate_permalink
+        "#{self.class.permalink_prefix}#{Array.new(self.class.permalink_length){rand(9)}.join}"
+      end
+
       def save_permalink(permalink_value=self.to_param)
-        field = self.class.permalink_field
-          # Do other links exist with this permalink?
-          other = self.class.where("#{field} LIKE ?", "#{permalink_value}%")
-          if other.any?
-            # Find the existing permalink with the highest number, and increment that number.
-            # (If none of the existing permalinks have a number, this will evaluate to 1.)
-            number = other.map { |o| o.send(field)[/-(\d+)$/, 1].to_i }.max + 1
-            permalink_value += "-#{number.to_s}"
-          end
-        write_attribute(field, permalink_value)
+        self.with_lock do
+          permalink_value ||= generate_permalink
+
+          field = self.class.permalink_field
+            # Do other links exist with this permalink?
+            other = self.class.where("#{self.class.table_name}.#{field} LIKE ?", "#{permalink_value}%")
+            if other.any?
+              # Find the existing permalink with the highest number, and increment that number.
+              # (If none of the existing permalinks have a number, this will evaluate to 1.)
+              number = other.map { |o| o.send(field)[/-(\d+)$/, 1].to_i }.max + 1
+              permalink_value += "-#{number.to_s}"
+            end
+          write_attribute(field, permalink_value)
+        end
       end
     end
   end

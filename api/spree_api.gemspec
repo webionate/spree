@@ -16,8 +16,6 @@ Gem::Specification.new do |gem|
   gem.version       = version
 
   gem.add_dependency 'spree_core', version
-  gem.add_dependency 'versioncake', '0.4.0'
-
-  gem.add_development_dependency 'rspec-rails', '2.9.0'
-  gem.add_development_dependency 'database_cleaner'
+  gem.add_dependency 'rabl', '~> 0.9.4.pre1'
+  gem.add_dependency 'versioncake', '~> 2.3.1'
 end

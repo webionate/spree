@@ -42,14 +42,13 @@ module SpreeCmd
     def prepare_options
       @spree_gem_options = {}
 
-      if options[:edge]
-        @spree_gem_options[:git] = 'git://github.com/spree/spree.git'
+      if options[:edge] || options[:branch]
+        @spree_gem_options[:git] = 'https://github.com/spree/spree.git'
       elsif options[:path]
         @spree_gem_options[:path] = options[:path]
       elsif options[:git]
         @spree_gem_options[:git] = options[:git]
         @spree_gem_options[:ref] = options[:ref] if options[:ref]
-        @spree_gem_options[:branch] = options[:branch] if options[:branch]
         @spree_gem_options[:tag] = options[:tag] if options[:tag]
       elsif options[:version]
         @spree_gem_options[:version] = options[:version]
@@ -57,12 +56,14 @@ module SpreeCmd
         version = Gem.loaded_specs['spree_cmd'].version
         @spree_gem_options[:version] = version.to_s
       end
+
+      @spree_gem_options[:branch] = options[:branch] if options[:branch]
     end
 
     def ask_questions
       @install_default_gateways = ask_with_default('Would you like to install the default gateways? (Recommended)')
       @install_default_auth = ask_with_default('Would you like to install the default authentication system?')
-      
+
       if @install_default_auth
         @user_class = "Spree::User"
       else
@@ -70,7 +71,7 @@ module SpreeCmd
         if @user_class.blank?
           @user_class = "User"
         end
-      end 
+      end
 
       if options[:skip_install_data]
         @run_migrations = false
@@ -93,12 +94,16 @@ module SpreeCmd
 
         gem :spree, @spree_gem_options
 
-        if @install_default_gateways
-          gem :spree_gateway
+        if @install_default_gateways && @spree_gem_options[:branch]
+          gem :spree_gateway, github: 'spree/spree_gateway', branch: @spree_gem_options[:branch]
+        elsif @install_default_gateways
+          gem :spree_gateway, github: 'spree/spree_gateway', branch: '2-4-stable'
         end
 
-        if @install_default_auth
-          gem :spree_auth_devise, :github => "spree/spree_auth_devise", :branch => "edge"
+        if @install_default_auth && @spree_gem_options[:branch]
+          gem :spree_auth_devise, github: 'spree/spree_auth_devise', branch: @spree_gem_options[:branch]
+        elsif @install_default_auth
+          gem :spree_auth_devise, github: 'spree/spree_auth_devise', branch: '2-4-stable'
         end
 
         run 'bundle install', :capture => true
@@ -124,8 +129,8 @@ module SpreeCmd
         say_status :gemfile, name
         parts = ["'#{name}'"]
         parts << ["'#{gem_options.delete(:version)}'"] if gem_options[:version]
-        gem_options.each { |key, value| parts << ":#{key} => '#{value}'" }
-        append_file 'Gemfile', "gem #{parts.join(', ')}\n", :verbose => false
+        gem_options.each { |key, value| parts << "#{key}: '#{value}'" }
+        append_file 'Gemfile', "\ngem #{parts.join(', ')}", :verbose => false
       end
 
       def ask_with_default(message, default = 'yes')
@@ -161,7 +166,7 @@ module SpreeCmd
       end
 
       def rails_project?
-        File.exists? File.join(@app_path, 'script', 'rails')
+        File.exists? File.join(@app_path, 'bin', 'rails')
       end
 
       def linux?

@@ -12,16 +12,20 @@ module ControllerHacks
     api_process(action, params, session, flash, "PUT")
   end
 
+  def api_patch(action, params={}, session=nil, flash=nil)
+    api_process(action, params, session, flash, "PATCH")
+  end
+
   def api_delete(action, params={}, session=nil, flash=nil)
     api_process(action, params, session, flash, "DELETE")
   end
 
   def api_process(action, params={}, session=nil, flash=nil, method="get")
     scoping = respond_to?(:resource_scoping) ? resource_scoping : {}
-    process(action, params.merge(scoping).reverse_merge!(:use_route => :spree, :format => :json), session, flash, method)
+    process(action, method, params.merge(scoping).reverse_merge!(:use_route => :spree, :format => :json), session, flash)
   end
 end
 
 RSpec.configure do |config|
-  config.include ControllerHacks, :type => :controller
+  config.include ControllerHacks, type: :controller
 end

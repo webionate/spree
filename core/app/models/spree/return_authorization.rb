@@ -1,94 +1,104 @@
 module Spree
-  class ReturnAuthorization < ActiveRecord::Base
-    belongs_to :order
+  class ReturnAuthorization < Spree::Base
+    belongs_to :order, class_name: 'Spree::Order', inverse_of: :return_authorizations
 
-    has_many :inventory_units
+    has_many :return_items, inverse_of: :return_authorization, dependent: :destroy
+    has_many :inventory_units, through: :return_items
+    has_many :customer_returns, through: :return_items
+
+    belongs_to :stock_location
+    belongs_to :reason, class_name: 'Spree::ReturnAuthorizationReason', foreign_key: :return_authorization_reason_id
     before_create :generate_number
-    before_save :force_positive_amount
 
-    validates :order, :presence => true
-    validates :amount, :numericality => true
-    validate :must_have_shipped_units
+    after_save :generate_expedited_exchange_reimbursements
 
-    attr_accessible :amount, :reason
+    accepts_nested_attributes_for :return_items, allow_destroy: true
 
-    state_machine :initial => 'authorized' do
-      after_transition :to => 'received', :do => :process_return
+    validates :order, presence: true
+    validates :reason, presence: true
+    validates :stock_location, presence: true
+    validate :must_have_shipped_units, on: :create
 
-      event :receive do
-        transition :to => 'received', :from => 'authorized', :if => :allow_receive?
-      end
+
+    # These are called prior to generating expedited exchanges shipments.
+    # Should respond to a "call" method that takes the list of return items
+    class_attribute :pre_expedited_exchange_hooks
+    self.pre_expedited_exchange_hooks = []
+
+    state_machine initial: :authorized do
+      before_transition to: :canceled, do: :cancel_return_items
+
       event :cancel do
-        transition :to => 'canceled', :from => 'authorized'
+        transition to: :canceled, from: :authorized, if: lambda { |return_authorization| return_authorization.can_cancel_return_items? }
       end
+
+    end
+
+    self.whitelisted_ransackable_attributes = ['memo']
+
+    def pre_tax_total
+      return_items.sum(:pre_tax_amount)
+    end
+
+    def display_pre_tax_total
+      Spree::Money.new(pre_tax_total, { currency: currency })
     end
 
     def currency
       order.nil? ? Spree::Config[:currency] : order.currency
     end
 
-    def display_amount
-      Spree::Money.new(amount, { :currency => currency })
+    def refundable_amount
+      order.pre_tax_item_amount + order.promo_total
     end
 
-    def add_variant(variant_id, quantity)
-      order_units = order.inventory_units.group_by(&:variant_id)
-      returned_units = inventory_units.group_by(&:variant_id)
+    def customer_returned_items?
+      customer_returns.exists?
+    end
 
-      count = 0
-
-      if returned_units[variant_id].nil? || returned_units[variant_id].size < quantity
-        count = returned_units[variant_id].nil? ? 0 : returned_units[variant_id].size
-
-        order_units[variant_id].each do |inventory_unit|
-          next unless inventory_unit.return_authorization.nil? && count < quantity
-
-          inventory_unit.return_authorization = self
-          inventory_unit.save!
-
-          count += 1
-        end
-      elsif returned_units[variant_id].size > quantity
-        (returned_units[variant_id].size - quantity).times do |i|
-          returned_units[variant_id][i].return_authorization_id = nil
-          returned_units[variant_id][i].save!
-        end
-      end
-
-      order.authorize_return! if inventory_units.reload.size > 0 && !order.awaiting_return?
+    def can_cancel_return_items?
+      return_items.any?(&:can_cancel?) || return_items.blank?
     end
 
     private
+
       def must_have_shipped_units
-        errors.add(:order, I18n.t(:has_no_shipped_units)) if order.nil? || !order.inventory_units.any?(&:shipped?)
+        if order.nil? || order.inventory_units.shipped.none?
+          errors.add(:order, Spree.t(:has_no_shipped_units))
+        end
       end
 
       def generate_number
-        return if number
-
-        record = true
-        while record
-          random = "RMA#{Array.new(9){rand(9)}.join}"
-          record = self.class.where(:number => random).first
+        self.number ||= loop do
+          random = "RA#{Array.new(9){rand(9)}.join}"
+          break random unless self.class.exists?(number: random)
         end
-        self.number = random
       end
 
-      def process_return
-        inventory_units.each &:return!
-        credit = Adjustment.new(:amount => amount.abs * -1, :label => I18n.t(:rma_credit))
-        credit.source = self
-        credit.adjustable = order
-        credit.save
-        order.return if inventory_units.all?(&:returned?)
+      def cancel_return_items
+        return_items.each { |item| item.cancel! if item.can_cancel? }
       end
 
-      def allow_receive?
-        !inventory_units.empty?
-      end
+      def generate_expedited_exchange_reimbursements
+        return unless Spree::Config[:expedited_exchanges]
 
-      def force_positive_amount
-        self.amount = amount.abs
+        items_to_exchange = return_items.select(&:exchange_required?)
+        items_to_exchange.each(&:attempt_accept)
+        items_to_exchange.select!(&:accepted?)
+
+        return if items_to_exchange.blank?
+
+        pre_expedited_exchange_hooks.each { |h| h.call items_to_exchange }
+
+        reimbursement = Reimbursement.new(return_items: items_to_exchange, order: order)
+
+        if reimbursement.save
+          reimbursement.perform!
+        else
+          errors.add(:base, reimbursement.errors.full_messages)
+          raise ActiveRecord::RecordInvalid.new(self)
+        end
+
       end
   end
 end

@@ -1,126 +1,102 @@
 module Spree
-  class InventoryUnit < ActiveRecord::Base
-    belongs_to :variant
-    belongs_to :order
-    belongs_to :shipment
-    belongs_to :return_authorization
+  class InventoryUnit < Spree::Base
+    belongs_to :variant, class_name: "Spree::Variant", inverse_of: :inventory_units
+    belongs_to :order, class_name: "Spree::Order", inverse_of: :inventory_units
+    belongs_to :shipment, class_name: "Spree::Shipment", touch: true, inverse_of: :inventory_units
+    belongs_to :return_authorization, class_name: "Spree::ReturnAuthorization", inverse_of: :inventory_units
+    belongs_to :line_item, class_name: "Spree::LineItem", inverse_of: :inventory_units
 
-    scope :backordered, lambda { where(:state => 'backordered') }
-    scope :shipped, lambda { where(:state => 'shipped') }
+    has_many :return_items, inverse_of: :inventory_unit
+    has_one :original_return_item, class_name: "Spree::ReturnItem", foreign_key: :exchange_inventory_unit_id
 
-    def self.backorder
-      warn "[SPREE] Spree::InventoryUnit.backorder will be deprecated in Spree 1.3. Please use Spree::Product.backordered instead."
-      backordered
+    scope :backordered, -> { where state: 'backordered' }
+    scope :on_hand, -> { where state: 'on_hand' }
+    scope :shipped, -> { where state: 'shipped' }
+    scope :returned, -> { where state: 'returned' }
+    scope :backordered_per_variant, ->(stock_item) do
+      includes(:shipment, :order)
+        .where("spree_shipments.state != 'canceled'").references(:shipment)
+        .where(variant_id: stock_item.variant_id)
+        .where('spree_orders.completed_at is not null')
+        .backordered.order("spree_orders.completed_at ASC")
     end
-
-    attr_accessible :shipment
 
     # state machine (see http://github.com/pluginaweek/state_machine/tree/master for details)
-    state_machine :initial => 'on_hand' do
+    state_machine initial: :on_hand do
       event :fill_backorder do
-        transition :to => 'sold', :from => 'backordered'
+        transition to: :on_hand, from: :backordered
       end
+      after_transition on: :fill_backorder, do: :fulfill_order
+
       event :ship do
-        transition :to => 'shipped', :if => :allow_ship?
+        transition to: :shipped, if: :allow_ship?
       end
+
       event :return do
-        transition :to => 'returned', :from => 'shipped'
+        transition to: :returned, from: :shipped
       end
-
-      after_transition :on => :fill_backorder, :do => :update_order
-      after_transition :to => 'returned', :do => :restock_variant
     end
 
-    # Assigns inventory to a newly completed order.
-    # Should only be called once during the life-cycle of an order, on transition to completed.
+    # This was refactored from a simpler query because the previous implementation
+    # led to issues once users tried to modify the objects returned. That's due
+    # to ActiveRecord `joins(shipment: :stock_location)` only returning readonly
+    # objects
     #
-    def self.assign_opening_inventory(order)
-      return [] unless order.completed?
-
-      #increase inventory to meet initial requirements
-      order.line_items.each do |line_item|
-        increase(order, line_item.variant, line_item.quantity)
+    # Returns an array of backordered inventory units as per a given stock item
+    def self.backordered_for_stock_item(stock_item)
+      backordered_per_variant(stock_item).select do |unit|
+        unit.shipment.stock_location == stock_item.stock_location
       end
     end
 
-    # manages both variant.count_on_hand and inventory unit creation
-    #
-    def self.increase(order, variant, quantity)
-      back_order = determine_backorder(order, variant, quantity)
-      sold = quantity - back_order
-
-      #set on_hand if configured
-      if self.track_levels?(variant)
-        variant.decrement!(:count_on_hand, quantity)
-      end
-
-      #create units if configured
-      if Spree::Config[:create_inventory_units]
-        create_units(order, variant, sold, back_order)
+    def self.finalize_units!(inventory_units)
+      inventory_units.map do |iu|
+        iu.update_columns(
+          pending: false,
+          updated_at: Time.now,
+        )
       end
     end
 
-    def self.decrease(order, variant, quantity)
-      if self.track_levels?(variant)
-        variant.increment!(:count_on_hand, quantity)
-      end
-
-      if Spree::Config[:create_inventory_units]
-        destroy_units(order, variant, quantity)
-      end
+    def find_stock_item
+      Spree::StockItem.where(stock_location_id: shipment.stock_location_id,
+        variant_id: variant_id).first
     end
 
-    def self.track_levels?(variant)
-      Spree::Config[:track_inventory_levels] && !variant.on_demand
+    # Remove variant default_scope `deleted_at: nil`
+    def variant
+      Spree::Variant.unscoped { super }
+    end
+
+    def current_or_new_return_item
+      Spree::ReturnItem.from_inventory_unit(self)
+    end
+
+    def additional_tax_total
+      line_item.additional_tax_total * percentage_of_line_item
+    end
+
+    def included_tax_total
+      line_item.included_tax_total * percentage_of_line_item
     end
 
     private
+
       def allow_ship?
-        Spree::Config[:allow_backorder_shipping] || self.sold?
+        self.on_hand?
       end
 
-      def self.determine_backorder(order, variant, quantity)
-        if variant.on_hand == 0
-          quantity
-        elsif variant.on_hand.present? and variant.on_hand < quantity
-          quantity - (variant.on_hand < 0 ? 0 : variant.on_hand)
-        else
-          0
-        end
+      def fulfill_order
+        self.reload
+        order.fulfill!
       end
 
-      def self.destroy_units(order, variant, quantity)
-        variant_units = order.inventory_units.group_by(&:variant_id)
-        return unless variant_units.include? variant.id
-
-        variant_units = variant_units[variant.id].reject do |variant_unit|
-          variant_unit.state == 'shipped'
-        end.sort_by(&:state)
-
-        quantity.times do
-          inventory_unit = variant_units.shift
-          inventory_unit.destroy
-        end
+      def percentage_of_line_item
+        1 / BigDecimal.new(line_item.quantity)
       end
 
-      def self.create_units(order, variant, sold, back_order)
-        return if back_order > 0 && !Spree::Config[:allow_backorders]
-
-        shipment = order.shipments.detect { |shipment| !shipment.shipped? }
-
-        sold.times { order.inventory_units.create({:variant => variant, :state => 'sold', :shipment => shipment}, :without_protection => true) }
-        back_order.times { order.inventory_units.create({:variant => variant, :state => 'backordered', :shipment => shipment}, :without_protection => true) }
-      end
-
-      def update_order
-        order.update!
-      end
-
-      def restock_variant
-        if self.class.track_levels?(variant)
-          variant.on_hand += 1
-          variant.save
-        end
+      def current_return_item
+        return_items.not_cancelled.first
       end
   end
 end

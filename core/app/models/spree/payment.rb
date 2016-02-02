@@ -1,49 +1,96 @@
 module Spree
-  class Payment < ActiveRecord::Base
+  class Payment < Spree::Base
     include Spree::Payment::Processing
-    belongs_to :order
-    belongs_to :source, :polymorphic => true, :validate => true
-    belongs_to :payment_method
 
-    has_many :offsets, :class_name => "Spree::Payment", :foreign_key => :source_id, :conditions => "source_type = 'Spree::Payment' AND amount < 0 AND state = 'completed'"
-    has_many :log_entries, :as => :source
+    IDENTIFIER_CHARS    = (('A'..'Z').to_a + ('0'..'9').to_a - %w(0 1 I O)).freeze
+    NON_RISKY_AVS_CODES = ['B', 'D', 'H', 'J', 'M', 'Q', 'T', 'V', 'X', 'Y'].freeze
+    RISKY_AVS_CODES     = ['A', 'C', 'E', 'F', 'G', 'I', 'K', 'L', 'N', 'O', 'P', 'R', 'S', 'U', 'W', 'Z'].freeze
 
-    after_save :create_payment_profile, :if => :profiles_supported?
+    belongs_to :order, class_name: 'Spree::Order', touch: true, inverse_of: :payments
+    belongs_to :source, polymorphic: true
+    belongs_to :payment_method, class_name: 'Spree::PaymentMethod', inverse_of: :payments
+
+    has_many :offsets, -> { offset_payment }, class_name: "Spree::Payment", foreign_key: :source_id
+    has_many :log_entries, as: :source
+    has_many :state_changes, as: :stateful
+    has_many :capture_events, :class_name => 'Spree::PaymentCaptureEvent'
+    has_many :refunds, inverse_of: :payment
+
+    validates_presence_of :payment_method
+    before_validation :validate_source
+    before_create :set_unique_identifier
+
+    after_save :create_payment_profile, if: :profiles_supported?
 
     # update the order totals, etc.
     after_save :update_order
 
-    attr_accessor :source_attributes
+    # invalidate previously entered payments
+    after_create :invalidate_old_payments
+
+    attr_accessor :source_attributes, :request_env
+
     after_initialize :build_source
 
-    attr_accessible :amount, :payment_method_id, :source_attributes
+    validates :amount, numericality: true
 
-    scope :from_credit_card, lambda { where(:source_type => 'Spree::CreditCard') }
-    scope :with_state, lambda { |s| where(:state => s) }
-    scope :completed, with_state('completed')
-    scope :pending, with_state('pending')
-    scope :failed, with_state('failed')
+    default_scope -> { order("#{self.table_name}.created_at") }
+
+    scope :from_credit_card, -> { where(source_type: 'Spree::CreditCard') }
+    scope :with_state, ->(s) { where(state: s.to_s) }
+    # "offset" is reserved by activerecord
+    scope :offset_payment, -> { where("source_type = 'Spree::Payment' AND amount < 0 AND state = 'completed'") }
+
+    scope :checkout, -> { with_state('checkout') }
+    scope :completed, -> { with_state('completed') }
+    scope :pending, -> { with_state('pending') }
+    scope :processing, -> { with_state('processing') }
+    scope :failed, -> { with_state('failed') }
+
+    scope :risky, -> { where("avs_response IN (?) OR (cvv_response_code IS NOT NULL and cvv_response_code != 'M') OR state = 'failed'", RISKY_AVS_CODES) }
+    scope :valid, -> { where.not(state: %w(failed invalid)) }
+
+    # transaction_id is much easier to understand
+    def transaction_id
+      response_code
+    end
 
     # order state machine (see http://github.com/pluginaweek/state_machine/tree/master for details)
-    state_machine :initial => 'checkout' do
+    state_machine initial: :checkout do
       # With card payments, happens before purchase or authorization happens
+      #
+      # Setting it after creating a profile and authorizing a full amount will
+      # prevent the payment from being authorized again once Order transitions
+      # to complete
       event :started_processing do
-        transition :from => ['checkout', 'pending', 'completed', 'processing'], :to => 'processing'
+        transition from: [:checkout, :pending, :completed, :processing], to: :processing
       end
       # When processing during checkout fails
       event :failure do
-        transition :from => ['pending', 'processing'], :to => 'failed'
+        transition from: [:pending, :processing], to: :failed
       end
       # With card payments this represents authorizing the payment
       event :pend do
-        transition :from => ['checkout', 'processing'], :to => 'pending'
+        transition from: [:checkout, :processing], to: :pending
       end
       # With card payments this represents completing a purchase or capture transaction
       event :complete do
-        transition :from => ['processing', 'pending', 'checkout'], :to => 'completed'
+        transition from: [:processing, :pending, :checkout], to: :completed
       end
       event :void do
-        transition :from => ['pending', 'completed', 'checkout'], :to => 'void'
+        transition from: [:pending, :processing, :completed, :checkout], to: :void
+      end
+      # when the card brand isnt supported
+      event :invalidate do
+        transition from: [:checkout], to: :invalid
+      end
+
+      after_transition do |payment, transition|
+        payment.state_changes.create!(
+          previous_state: transition.from,
+          next_state:     transition.to,
+          name:           'payment',
+        )
       end
     end
 
@@ -51,16 +98,27 @@ module Spree
       order.currency
     end
 
-    def display_amount
-      Spree::Money.new(amount, { :currency => currency })
+    def money
+      Spree::Money.new(amount, { currency: currency })
+    end
+    alias display_amount money
+
+    def amount=(amount)
+      self[:amount] =
+        case amount
+        when String
+          separator = I18n.t('number.currency.format.separator')
+          number    = amount.delete("^0-9-#{separator}\.").tr(separator, '.')
+          number.to_d if number.present?
+        end || amount
     end
 
     def offsets_total
-      offsets.map(&:amount).sum
+      offsets.pluck(:amount).sum
     end
 
     def credit_allowed
-      amount - offsets_total
+      amount - (offsets_total.abs + refunds.sum(:amount))
     end
 
     def can_credit?
@@ -69,9 +127,11 @@ module Spree
 
     # see https://github.com/spree/spree/issues/981
     def build_source
-      return if source_attributes.nil?
-      if payment_method and payment_method.payment_source_class
+      return unless new_record?
+      if source_attributes.present? && source.blank? && payment_method.try(:payment_source_class)
         self.source = payment_method.payment_source_class.new(source_attributes)
+        self.source.payment_method_id = payment_method.id
+        self.source.user_id = self.order.user_id if self.order
       end
     end
 
@@ -85,12 +145,40 @@ module Spree
       res || payment_method
     end
 
+    def is_avs_risky?
+      return false if avs_response.blank? || NON_RISKY_AVS_CODES.include?(avs_response)
+      return true
+    end
+
+    def is_cvv_risky?
+      return false if cvv_response_code == "M"
+      return false if cvv_response_code.nil?
+      return false if cvv_response_message.present?
+      return true
+    end
+
+    def captured_amount
+      capture_events.sum(:amount)
+    end
+
+    def uncaptured_amount
+      amount - captured_amount
+    end
+
+    def editable?
+      checkout? || pending?
+    end
+
     private
-      def amount_is_valid_for_outstanding_balance_or_credit
-        return unless order
-        if amount != order.outstanding_balance
-          errors.add(:amount, "does not match outstanding balance (#{order.outstanding_balance})")
+
+      def validate_source
+        if source && !source.valid?
+          source.errors.each do |field, error|
+            field_name = I18n.t("activerecord.attributes.#{source.class.to_s.underscore}.#{field}")
+            self.errors.add(Spree.t(source.class.to_s.demodulize.underscore), "#{field_name} #{error}")
+          end
         end
+        return !errors.present?
       end
 
       def profiles_supported?
@@ -98,15 +186,69 @@ module Spree
       end
 
       def create_payment_profile
-        return unless source.is_a?(CreditCard) && source.number && !source.has_payment_profile?
+        # Don't attempt to create on bad payments.
+        return if %w(invalid failed).include?(state)
+        # Payment profile cannot be created without source
+        return unless source
+        # Imported payments shouldn't create a payment profile.
+        return if source.imported
+
         payment_method.create_profile(self)
       rescue ActiveMerchant::ConnectionError => e
         gateway_error e
       end
 
+      def invalidate_old_payments
+        if state != 'invalid' and state != 'failed'
+          order.payments.with_state('checkout').where("id != ?", self.id).each do |payment|
+            payment.invalidate!
+          end
+        end
+      end
+
+      def split_uncaptured_amount
+        if uncaptured_amount > 0
+          order.payments.create! amount: uncaptured_amount,
+                                 avs_response: avs_response,
+                                 cvv_response_code: cvv_response_code,
+                                 cvv_response_message: cvv_response_message,
+                                 payment_method: payment_method,
+                                 response_code: response_code,
+                                 source: source,
+                                 state: 'pending'
+          update_attributes(amount: captured_amount)
+        end
+      end
+
       def update_order
-        order.payments.reload
-        order.update!
+        if completed? || void?
+          order.updater.update_payment_total
+        end
+
+        if order.completed?
+          order.updater.update_payment_state
+          order.updater.update_shipments
+          order.updater.update_shipment_state
+        end
+
+        if self.completed? || order.completed?
+          order.persist_totals
+        end
+      end
+
+      # Necessary because some payment gateways will refuse payments with
+      # duplicate IDs. We *were* using the Order number, but that's set once and
+      # is unchanging. What we need is a unique identifier on a per-payment basis,
+      # and this is it. Related to #1998.
+      # See https://github.com/spree/spree/issues/1998#issuecomment-12869105
+      def set_unique_identifier
+        begin
+          self.identifier = generate_identifier
+        end while self.class.exists?(identifier: self.identifier)
+      end
+
+      def generate_identifier
+        Array.new(8){ IDENTIFIER_CHARS.sample }.join
       end
   end
 end

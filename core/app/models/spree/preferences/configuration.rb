@@ -28,8 +28,8 @@ module Spree::Preferences
       yield(self) if block_given?
     end
 
-    def preference_cache_key(name)
-      [self.class.name, name].join('::').underscore
+    def preferences
+      ScopedStore.new(self.class.name.underscore)
     end
 
     def reset

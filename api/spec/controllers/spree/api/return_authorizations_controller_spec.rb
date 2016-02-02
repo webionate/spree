@@ -1,21 +1,13 @@
 require 'spec_helper'
 
 module Spree
-  describe Api::ReturnAuthorizationsController do
+  describe Api::ReturnAuthorizationsController, :type => :controller do
     render_views
 
-    let!(:order) do
-     order = create(:order)
-     order.line_items << create(:line_item)
-     order.shipments << create(:shipment, :state => 'shipped')
-     order.finalize!
-     order.shipments.update_all(:state => 'shipped')
-     order.inventory_units.update_all(:state => 'shipped')
-     order
-    end
+    let!(:order) { create(:shipped_order) }
 
     let(:product) { create(:product) }
-    let(:attributes) { [:id, :reason, :amount, :state] }
+    let(:attributes) { [:id, :memo, :state] }
     let(:resource_scoping) { { :order_id => order.to_param } }
 
     before do
@@ -24,7 +16,7 @@ module Spree
 
     context "as the order owner" do
       before do
-        Order.any_instance.stub :user => current_api_user
+        allow_any_instance_of(Order).to receive_messages :user => current_api_user
       end
 
       it "cannot see any return authorizations" do
@@ -49,12 +41,12 @@ module Spree
 
       it "cannot update a return authorization" do
         api_put :update
-        assert_unauthorized!
+        assert_not_found!
       end
 
       it "cannot delete a return authorization" do
         api_delete :destroy
-        assert_unauthorized!
+        assert_not_found!
       end
     end
 
@@ -65,82 +57,96 @@ module Spree
         FactoryGirl.create(:return_authorization, :order => order)
         return_authorization = order.return_authorizations.first
         api_get :show, :order_id => order.number, :id => return_authorization.id
-        response.status.should == 200
-        json_response.should have_attributes(attributes)
-        json_response["state"].should_not be_blank
+        expect(response.status).to eq(200)
+        expect(json_response).to have_attributes(attributes)
+        expect(json_response["state"]).not_to be_blank
       end
 
       it "can get a list of return authorizations" do
         FactoryGirl.create(:return_authorization, :order => order)
         FactoryGirl.create(:return_authorization, :order => order)
         api_get :index, { :order_id => order.number }
-        response.status.should == 200
+        expect(response.status).to eq(200)
         return_authorizations = json_response["return_authorizations"]
-        return_authorizations.first.should have_attributes(attributes)
-        return_authorizations.first.should_not == return_authorizations.last
+        expect(return_authorizations.first).to have_attributes(attributes)
+        expect(return_authorizations.first).not_to eq(return_authorizations.last)
       end
 
       it 'can control the page size through a parameter' do
         FactoryGirl.create(:return_authorization, :order => order)
         FactoryGirl.create(:return_authorization, :order => order)
         api_get :index, :order_id => order.number, :per_page => 1
-        json_response['count'].should == 1
-        json_response['current_page'].should == 1
-        json_response['pages'].should == 2
+        expect(json_response['count']).to eq(1)
+        expect(json_response['current_page']).to eq(1)
+        expect(json_response['pages']).to eq(2)
       end
 
       it 'can query the results through a paramter' do
         FactoryGirl.create(:return_authorization, :order => order)
-        expected_result = create(:return_authorization, :reason => 'damaged')
+        expected_result = create(:return_authorization, :memo => 'damaged')
         order.return_authorizations << expected_result
-        api_get :index, :q => { :reason_cont => 'damage' }
-        json_response['count'].should == 1
-        json_response['return_authorizations'].first['reason'].should eq expected_result.reason
+        api_get :index, :q => { :memo_cont => 'damaged' }
+        expect(json_response['count']).to eq(1)
+        expect(json_response['return_authorizations'].first['memo']).to eq expected_result.memo
       end
 
       it "can learn how to create a new return authorization" do
         api_get :new
-        json_response["attributes"].should == ["id", "number", "state", "amount", "order_id", "reason", "created_at", "updated_at"]
+        expect(json_response["attributes"]).to eq(["id", "number", "state", "order_id", "memo", "created_at", "updated_at"])
         required_attributes = json_response["required_attributes"]
-        required_attributes.should include("order")
+        expect(required_attributes).to include("order")
       end
 
       it "can update a return authorization on the order" do
         FactoryGirl.create(:return_authorization, :order => order)
         return_authorization = order.return_authorizations.first
-        api_put :update, :id => return_authorization.id, :return_authorization => { :amount => 19.99 }
-        response.status.should == 200
-        json_response.should have_attributes(attributes)
+        api_put :update, :id => return_authorization.id, :return_authorization => { :memo => "ABC" }
+        expect(response.status).to eq(200)
+        expect(json_response).to have_attributes(attributes)
+      end
+
+      it "can cancel a return authorization on the order" do
+        FactoryGirl.create(:new_return_authorization, :order => order)
+        return_authorization = order.return_authorizations.first
+        expect(return_authorization.state).to eq("authorized")
+        api_delete :cancel, :id => return_authorization.id
+        expect(response.status).to eq(200)
+        expect(return_authorization.reload.state).to eq("canceled")
       end
 
       it "can delete a return authorization on the order" do
         FactoryGirl.create(:return_authorization, :order => order)
         return_authorization = order.return_authorizations.first
         api_delete :destroy, :id => return_authorization.id
-        response.status.should == 204
-        lambda { return_authorization.reload }.should raise_error(ActiveRecord::RecordNotFound)
+        expect(response.status).to eq(204)
+        expect { return_authorization.reload }.to raise_error(ActiveRecord::RecordNotFound)
       end
 
       it "can add a new return authorization to an existing order" do
-        api_post :create, :return_autorization => { :order_id => order.number, :amount => 14.22, :reason => "Defective" }
-        response.status.should == 201
-        json_response.should have_attributes(attributes)
-        json_response["state"].should_not be_blank
+        stock_location = FactoryGirl.create(:stock_location)
+        reason = FactoryGirl.create(:return_authorization_reason)
+        rma_params = { :stock_location_id => stock_location.id,
+                       :return_authorization_reason_id => reason.id,
+                       :memo => "Defective" }
+        api_post :create, :order_id => order.number, :return_authorization => rma_params
+        expect(response.status).to eq(201)
+        expect(json_response).to have_attributes(attributes)
+        expect(json_response["state"]).not_to be_blank
       end
     end
 
     context "as just another user" do
       it "cannot add a return authorization to the order" do
-        api_post :create, :return_autorization => { :order_id => order.number, :amount => 14.22, :reason => "Defective" }
+        api_post :create, :return_autorization => { :order_id => order.number, :memo => "Defective" }
         assert_unauthorized!
       end
 
       it "cannot update a return authorization on the order" do
         FactoryGirl.create(:return_authorization, :order => order)
         return_authorization = order.return_authorizations.first
-        api_put :update, :id => return_authorization.id, :return_authorization => { :amount => 19.99 }
+        api_put :update, :id => return_authorization.id, :return_authorization => { :memo => "ABC" }
         assert_unauthorized!
-        return_authorization.reload.amount.should_not == 19.99
+        expect(return_authorization.reload.memo).not_to eq("ABC")
       end
 
       it "cannot delete a return authorization on the order" do
@@ -148,7 +154,7 @@ module Spree
         return_authorization = order.return_authorizations.first
         api_delete :destroy, :id => return_authorization.id
         assert_unauthorized!
-        lambda { return_authorization.reload }.should_not raise_error(ActiveRecord::RecordNotFound)
+        expect { return_authorization.reload }.not_to raise_error
       end
     end
   end

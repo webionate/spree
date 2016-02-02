@@ -1,27 +1,32 @@
 module Spree
-  class Taxon < ActiveRecord::Base
-    acts_as_nested_set :dependent => :destroy
+  class Taxon < Spree::Base
+    acts_as_nested_set dependent: :destroy
 
-    belongs_to :taxonomy
-    has_and_belongs_to_many :products, :join_table => 'spree_products_taxons'
+    belongs_to :taxonomy, class_name: 'Spree::Taxonomy', inverse_of: :taxons
+    has_many :classifications, -> { order(:position) }, dependent: :delete_all, inverse_of: :taxon
+    has_many :products, through: :classifications
+
+    has_and_belongs_to_many :prototypes, join_table: :spree_taxons_prototypes
 
     before_create :set_permalink
 
-    attr_accessible :name, :parent_id, :position, :icon, :description, :permalink, :taxonomy_id
+    validates :name, presence: true
+    validates :meta_keywords, length: { maximum: 255 }
+    validates :meta_description, length: { maximum: 255 }
+    validates :meta_title, length: { maximum: 255 }
 
-    validates :name, :presence => true
+    after_save :touch_ancestors_and_taxonomy
+    after_touch :touch_ancestors_and_taxonomy
 
     has_attached_file :icon,
-      :styles => { :mini => '32x32>', :normal => '128x128>' },
-      :default_style => :mini,
-      :url => '/spree/taxons/:id/:style/:basename.:extension',
-      :path => ':rails_root/public/spree/taxons/:id/:style/:basename.:extension',
-      :default_url => '/assets/default_taxon.png'
+      styles: { mini: '32x32>', normal: '128x128>' },
+      default_style: :mini,
+      url: '/spree/taxons/:id/:style/:basename.:extension',
+      path: ':rails_root/public/spree/taxons/:id/:style/:basename.:extension',
+      default_url: '/assets/default_taxon.png'
 
-    include Spree::Core::S3Support
-    supports_s3 :icon
-
-    include ::Spree::ProductFilters  # for detailed defs of filters
+    validates_attachment :icon,
+      content_type: { content_type: ["image/jpg", "image/jpeg", "image/png", "image/gif"] }
 
     # indicate which filters should be used for a taxon
     # this method should be customized to your own site
@@ -30,25 +35,36 @@ module Spree
       # fs << ProductFilters.taxons_below(self)
       ## unless it's a root taxon? left open for demo purposes
 
-      fs << ProductFilters.price_filter if ProductFilters.respond_to?(:price_filter)
-      fs << ProductFilters.brand_filter if ProductFilters.respond_to?(:brand_filter)
+      fs << Spree::Core::ProductFilters.price_filter if Spree::Core::ProductFilters.respond_to?(:price_filter)
+      fs << Spree::Core::ProductFilters.brand_filter if Spree::Core::ProductFilters.respond_to?(:brand_filter)
       fs
+    end
+
+    # Return meta_title if set otherwise generates from root name and/or taxon name
+    def seo_title
+      unless meta_title.blank?
+        meta_title
+      else
+        root? ? name : "#{root.name} - #{name}"
+      end
     end
 
     # Creates permalink based on Stringex's .to_url method
     def set_permalink
-      if parent_id.nil?
-        self.permalink = name.to_url if permalink.blank?
+      if parent.present?
+        self.permalink = [parent.permalink, (permalink.blank? ? name.to_url : permalink.split('/').last)].join('/')
       else
-        parent_taxon = Taxon.find(parent_id)
-        self.permalink = [parent_taxon.permalink, (permalink.blank? ? name.to_url : permalink.split('/').last)].join('/')
+        self.permalink = name.to_url if permalink.blank?
       end
     end
 
+    # For #2759
+    def to_param
+      permalink
+    end
+
     def active_products
-      scope = products.active
-      scope = scope.on_hand unless Spree::Config[:show_zero_stock_products]
-      scope
+      products.active
     end
 
     def pretty_name
@@ -58,5 +74,23 @@ module Spree
       ancestor_chain + "#{name}"
     end
 
+    # awesome_nested_set sorts by :lft and :rgt. This call re-inserts the child
+    # node so that its resulting position matches the observable 0-indexed position.
+    # ** Note ** no :position column needed - a_n_s doesn't handle the reordering if
+    #  you bring your own :order_column.
+    #
+    #  See #3390 for background.
+    def child_index=(idx)
+      move_to_child_with_index(parent, idx.to_i) unless self.new_record?
+    end
+
+    private
+
+    def touch_ancestors_and_taxonomy
+      # Touches all ancestors at once to avoid recursive taxonomy touch, and reduce queries.
+      self.class.where(id: ancestors.pluck(:id)).update_all(updated_at: Time.now)
+      # Have taxonomy touch happen in #touch_ancestors_and_taxonomy rather than association option in order for imports to override.
+      taxonomy.try!(:touch)
+    end
   end
 end

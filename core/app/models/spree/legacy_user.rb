@@ -1,22 +1,14 @@
 # Default implementation of User.  This class is intended to be modified by extensions (ex. spree_auth_devise)
 module Spree
-  class LegacyUser < ActiveRecord::Base
+  class LegacyUser < Spree::Base
+    include UserAddress
+    include UserPaymentSource
+
     self.table_name = 'spree_users'
-    attr_accessible :email, :password, :password_confirmation
 
-    belongs_to :ship_address, :class_name => 'Spree::Address'
-    belongs_to :bill_address, :class_name => 'Spree::Address'
+    has_many :orders, foreign_key: :user_id
 
-    scope :registered
-
-    def anonymous?
-      false
-    end
-
-    # Creates an anonymous user
-    def self.anonymous!
-      create
-    end
+    before_destroy :check_completed_orders
 
     def has_spree_role?(role)
       true
@@ -24,5 +16,11 @@ module Spree
 
     attr_accessor :password
     attr_accessor :password_confirmation
+
+    private
+
+      def check_completed_orders
+        raise Spree::Core::DestroyWithOrdersError if orders.complete.present?
+      end
   end
 end

@@ -1,1 +1,0 @@
-attributes *variant_attributes

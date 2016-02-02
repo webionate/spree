@@ -1,63 +1,68 @@
 module Spree
-  class ShippingMethod < ActiveRecord::Base
+  class ShippingMethod < Spree::Base
+    acts_as_paranoid
+    include Spree::CalculatedAdjustments
     DISPLAY = [:both, :front_end, :back_end]
 
-    default_scope where(:deleted_at => nil)
+    default_scope -> { where(deleted_at: nil) }
 
-    has_many :shipments
-    validates :name, :zone, :presence => true
+    has_many :shipping_method_categories, :dependent => :destroy
+    has_many :shipping_categories, through: :shipping_method_categories
+    has_many :shipping_rates, inverse_of: :shipping_method
+    has_many :shipments, :through => :shipping_rates
 
-    belongs_to :shipping_category
-    belongs_to :zone
+    has_and_belongs_to_many :zones, :join_table => 'spree_shipping_methods_zones',
+                                    :class_name => 'Spree::Zone',
+                                    :foreign_key => 'shipping_method_id'
 
-    attr_accessible :name, :zone_id, :display_on, :shipping_category_id,
-                    :match_none, :match_one, :match_all
+    belongs_to :tax_category, :class_name => 'Spree::TaxCategory'
 
-    calculated_adjustments
+    validates :name, presence: true
 
-    def available?(order, display_on = nil)
-      displayable?(display_on) && calculator.available?(order)
-    end
+    validate :at_least_one_shipping_category
 
-    def displayable?(display_on)
-      (self.display_on == display_on.to_s || self.display_on.blank?)
-    end
-
-    def within_zone?(order)
-      zone && zone.include?(order.ship_address)
-    end
-
-    def available_to_order?(order, display_on= nil)
-      available?(order, display_on) &&
-      within_zone?(order) &&
-      category_match?(order) &&
-      currency_match?(order)
-    end
-
-    # Indicates whether or not the category rules for this shipping method
-    # are satisfied (if applicable)
-    def category_match?(order)
-      return true if shipping_category.nil?
-
-      if match_all
-        order.products.all? { |p| p.shipping_category == shipping_category }
-      elsif match_one
-        order.products.any? { |p| p.shipping_category == shipping_category }
-      elsif match_none
-        order.products.all? { |p| p.shipping_category != shipping_category }
+    def include?(address)
+      return false unless address
+      zones.any? do |zone|
+        zone.include?(address)
       end
     end
 
-    def currency_match?(order)
-      calculator_currency.nil? || calculator_currency == order.currency
+    def build_tracking_url(tracking)
+      return if tracking.blank? || tracking_url.blank?
+      tracking_url.gsub(/:tracking/, ERB::Util.url_encode(tracking)) # :url_encode exists in 1.8.7 through 2.1.0
     end
 
-    def calculator_currency
-      calculator.preferences[:currency]
+    def self.calculators
+      spree_calculators.send(model_name_without_spree_namespace).select{ |c| c < Spree::ShippingCalculator }
     end
 
-    def self.all_available(order, display_on = nil)
-      all.select { |method| method.available_to_order?(order,display_on) }
+    # Some shipping methods are only meant to be set via backend
+    def frontend?
+      self.display_on != "back_end"
     end
+
+    def tax_category
+      Spree::TaxCategory.unscoped { super }
+    end
+
+    private
+      def compute_amount(calculable)
+        self.calculator.compute(calculable)
+      end
+
+      def at_least_one_shipping_category
+        if self.shipping_categories.empty?
+          self.errors[:base] << "You need to select at least one shipping category"
+        end
+      end
+
+      def self.on_backend_query
+        "#{table_name}.display_on != 'front_end' OR #{table_name}.display_on IS NULL"
+      end
+
+      def self.on_frontend_query
+        "#{table_name}.display_on != 'back_end' OR #{table_name}.display_on IS NULL"
+      end
   end
 end

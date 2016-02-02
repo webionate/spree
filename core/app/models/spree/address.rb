@@ -1,29 +1,34 @@
 module Spree
-  class Address < ActiveRecord::Base
-    belongs_to :country
-    belongs_to :state
+  class Address < Spree::Base
+    require 'twitter_cldr'
 
-    has_many :shipments
+    belongs_to :country, class_name: "Spree::Country"
+    belongs_to :state, class_name: "Spree::State"
 
-    validates :firstname, :lastname, :address1, :city, :zipcode, :country, :phone, :presence => true
-    validate :state_validate
+    has_many :shipments, inverse_of: :address
 
-    attr_accessible :firstname, :lastname, :address1, :address2,
-                    :city, :zipcode, :country_id, :state_id,
-                    :country, :state, :phone, :state_name,
-                    :company, :alternative_phone
+    validates :firstname, :lastname, :address1, :city, :country, presence: true
+    validates :zipcode, presence: true, if: :require_zipcode?
+    validates :phone, presence: true, if: :require_phone?
 
-    # Disconnected since there's no code to display error messages yet OR matching client-side validation
-    def phone_validate
-      return if phone.blank?
-      n_digits = phone.scan(/[0-9]/).size
-      valid_chars = (phone =~ /^[-+()\/\s\d]+$/)
-      errors.add :phone, :invalid unless (n_digits > 5 && valid_chars)
+    validate :state_validate, :postal_code_validate
+
+    alias_attribute :first_name, :firstname
+    alias_attribute :last_name, :lastname
+
+    self.whitelisted_ransackable_attributes = %w[firstname lastname]
+
+    def self.build_default
+      country = Spree::Country.find(Spree::Config[:default_country_id]) rescue Spree::Country.first
+      new(country: country)
     end
 
-    def self.default
-      country = Spree::Country.find(Spree::Config[:default_country_id]) rescue Spree::Country.first
-      new({:country => country}, :without_protection => true)
+    def self.default(user = nil, kind = "bill")
+      if user && user_address = user.send(:"#{kind}_address")
+        user_address.clone
+      else
+        build_default
+      end
     end
 
     # Can modify an address if it's not been used in an order (but checkouts controller has finer control)
@@ -70,19 +75,26 @@ module Spree
     # Generates an ActiveMerchant compatible address hash
     def active_merchant_hash
       {
-        :name => full_name,
-        :address1 => address1,
-        :address2 => address2,
-        :city => city,
-        :state => state_text,
-        :zip => zipcode,
-        :country => country.try(:iso),
-        :phone => phone
+        name: full_name,
+        address1: address1,
+        address2: address2,
+        city: city,
+        state: state_text,
+        zip: zipcode,
+        country: country.try(:iso),
+        phone: phone
       }
     end
 
-    private
+    def require_phone?
+      true
+    end
 
+    def require_zipcode?
+      true
+    end
+
+    private
       def state_validate
         # Skip state validation without country (also required)
         # or when disabled by preference
@@ -120,5 +132,12 @@ module Spree
         errors.add :state, :blank if state.blank? && state_name.blank?
       end
 
+      def postal_code_validate
+        return if country.blank? || country.iso.blank? || !require_zipcode?
+        return if !TwitterCldr::Shared::PostalCodes.territories.include?(country.iso.downcase.to_sym)
+
+        postal_code = TwitterCldr::Shared::PostalCodes.for_territory(country.iso)
+        errors.add(:zipcode, :invalid) if !postal_code.valid?(zipcode.to_s)
+      end
   end
 end

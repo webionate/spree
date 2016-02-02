@@ -1,4 +1,3 @@
-attributes :id, :amount, :payment_method_id
-child :payment_method => :payment_method do
-  attributes :id, :name, :environment
+child :available_payment_methods => :payment_methods do
+  attributes :id, :name, :environment, :method_type
 end

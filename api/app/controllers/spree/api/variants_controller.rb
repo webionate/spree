@@ -1,70 +1,72 @@
 module Spree
   module Api
     class VariantsController < Spree::Api::BaseController
-      before_filter :product
-
-      def index
-        @variants = scope.includes(:option_values).ransack(params[:q]).result.
-          page(params[:page]).per(params[:per_page])
-      end
-
-      def show
-        @variant = scope.includes(:option_values).find(params[:id])
-      end
-
-      def new
-      end
+      before_action :product
 
       def create
-        authorize! :create, Variant
-        @variant = scope.new(params[:product])
+        authorize! :create, Spree::Variant
+        @variant = scope.new(variant_params)
         if @variant.save
-          render :show, :status => 201
+          respond_with(@variant, status: 201, default_template: :show)
         else
           invalid_resource!(@variant)
         end
       end
 
+      def destroy
+        @variant = scope.accessible_by(current_ability, :destroy).find(params[:id])
+        @variant.destroy
+        respond_with(@variant, status: 204)
+      end
+
+      # The lazyloaded associations here are pretty much attached to which nodes
+      # we render on the view so we better update it any time a node is included
+      # or removed from the views.
+      def index
+        @variants = scope.includes({ option_values: :option_type }, :product, :default_price, :images, { stock_items: :stock_location })
+          .ransack(params[:q]).result.page(params[:page]).per(params[:per_page])
+        respond_with(@variants)
+      end
+
+      def new
+      end
+
+      def show
+        @variant = scope.includes({ option_values: :option_type }, :option_values, :product, :default_price, :images, { stock_items: :stock_location })
+          .find(params[:id])
+        respond_with(@variant)
+      end
+
       def update
-        authorize! :update, Variant
-        @variant = scope.find(params[:id])
-        if @variant.update_attributes(params[:variant])
-          render :show, :status => 200
+        @variant = scope.accessible_by(current_ability, :update).find(params[:id])
+        if @variant.update_attributes(variant_params)
+          respond_with(@variant, status: 200, default_template: :show)
         else
           invalid_resource!(@product)
         end
       end
 
-      def destroy
-        authorize! :delete, Variant
-        @variant = scope.find(params[:id])
-        @variant.destroy
-        render :text => nil, :status => 204
-      end
-
       private
         def product
-          @product ||= Spree::Product.find_by_permalink(params[:product_id]) if params[:product_id]
+          @product ||= Spree::Product.accessible_by(current_ability, :read).friendly.find(params[:product_id]) if params[:product_id]
         end
 
         def scope
           if @product
-            unless current_api_user.has_spree_role?("admin") || params[:show_deleted]
-              variants = @product.variants_including_master
-            else
-              variants = @product.variants_including_master_and_deleted
-            end
+            variants = @product.variants_including_master
           else
-            variants = Variant.scoped
-            if current_api_user.has_spree_role?("admin")
-              unless params[:show_deleted]
-                variants = Variant.active
-              end
-            else
-              variants = variants.active
-            end
+            variants = Spree::Variant
           end
-          variants
+
+          if current_ability.can?(:manage, Spree::Variant) && params[:show_deleted]
+            variants = variants.with_deleted
+          end
+
+          variants.accessible_by(current_ability, :read)
+        end
+
+        def variant_params
+          params.require(:variant).permit(permitted_variant_attributes)
         end
     end
   end
