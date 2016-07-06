@@ -31,7 +31,7 @@ Gem::Specification.new do |s|
   s.add_dependency 'json', '~> 1.7'
   s.add_dependency 'kaminari', '~> 0.15', '>= 0.15.1'
   s.add_dependency 'monetize', '~> 1.1'
-  s.add_dependency 'paperclip', '~> 4.2.0'
+  s.add_dependency 'paperclip', '~> 4.3.6'
   s.add_dependency 'paranoia', '~> 2.0.5'
   s.add_dependency 'premailer-rails'
   s.add_dependency 'rails', '~> 4.1.8'
