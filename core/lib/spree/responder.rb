@@ -1,5 +1,3 @@
-require "application_responder"
-
 module Spree
   class Responder < ::ActionController::Responder #:nodoc:
 
