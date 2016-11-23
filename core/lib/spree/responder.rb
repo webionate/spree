@@ -1,5 +1,7 @@
+require "application_responder"
+
 module Spree
-  class Responder < ActionController::Responder #:nodoc:
+  class Responder < ::ActionController::Responder #:nodoc:
 
     attr_accessor :on_success, :on_failure
 
